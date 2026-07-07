@@ -1,0 +1,21 @@
+# [VPT-VEDA] Build Outputs (Strict Rule)
+build/
+*.tar.gz
+*.so
+*.a
+*.o
+
+# STM32CubeMX & CLion IDE Tools
+.idea/
+.cmake/
+CMakeLists.txt.user
+Documents/
+*.mxproject
+
+# Yocto / Linux Kernel Development Artifacts
+*.ko
+*.mod.c
+*.mod
+modules.order
+Module.symvers
+.tmp_versions/
