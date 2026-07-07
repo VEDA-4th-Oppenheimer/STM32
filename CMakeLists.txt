@@ -57,4 +57,15 @@ if(NOT ALL_PROJECT_SOURCES)
     message(FATAL_ERROR "❌ src/ 폴더 내에 분석할 소스 코드가 하나도 없습니다!")
 endif()
 
-add_executable(veda_adts_target ${ALL_PROJECT_SOURCES})
+# 기존의 add_executable(veda_adts_target ${ALL_PROJECT_SOURCES}) 부분을 지우고 아래로 교체
+
+# 각 소스 파일을 독립적인 실행 파일로 빌드
+foreach(SOURCE_FILE ${ALL_PROJECT_SOURCES})
+    # 파일 경로에서 파일명 추출 (예: src/test_c.c -> test_c)
+    get_filename_component(TARGET_NAME ${SOURCE_FILE} NAME_WE)
+    
+    # 각 파일을 독립 실행 파일로 등록
+    add_executable(${TARGET_NAME} ${SOURCE_FILE})
+    
+    message(STATUS "🛠️ 타겟 생성됨: ${TARGET_NAME}")
+endforeach()
