@@ -3,8 +3,16 @@ name: Static Analysis Pipeline
 on:
   push:
     branches: [ main ]
-  pull_request:
+    # 👇 1. 아래에 명시된 파일들이 바뀔 때는 이 CI 파이프라인을 작동시키지 마라!
+    paths-ignore:
+      - '**.md'                  # 모든 마크다운 파일 (README 등)
+      - 'docs/**'                 # 문서 폴더 내부 파일들
+    pull_request:
     branches: [ main ]
+    # 👇 2. PR을 날릴 때도 문서만 바뀐 거라면 검사를 패스해라!
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
 jobs:
   static-analysis:
