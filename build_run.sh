@@ -45,12 +45,15 @@ cmake --build build 2>&1 | while read -r line; do
         id=$(echo "$id" | xargs)
         cwe=$(echo "$cwe" | xargs)
         
+        # build 폴더 기준의 상대 경로(../src/test1/...)를 프로젝트 루트 기준으로 정리
+        rel_file="${file#../}"
+        
         if [[ "$id" == *"misra"* ]]; then
-            echo -e "${YELLOW}[MISRA C:2023 위반][${severity}]${RESET} ${file}:${line_num}: ${message} (${id})"
+            echo -e "${YELLOW}[MISRA C:2023 위반][${severity}]${RESET} ${rel_file}:${line_num}: ${message} (${id})"
         elif [[ -n "$cwe" && "$cwe" != "0" ]]; then
-            echo -e "${RED}[CWE 보안위반][${severity}]${RESET} ${file}:${line_num}: ${message} (CWE-${cwe})"
+            echo -e "${RED}[CWE 보안위반][${severity}]${RESET} ${rel_file}:${line_num}: ${message} (CWE-${cwe})"
         else
-            echo -e "${GREEN}[일반 정적분석][${severity}]${RESET} ${file}:${line_num}: ${message} (${id})"
+            echo -e "${GREEN}[일반 정적분석][${severity}]${RESET} ${rel_file}:${line_num}: ${message} (${id})"
         fi
 
     # -----------------------------------------------------------------
@@ -64,18 +67,19 @@ cmake --build build 2>&1 | while read -r line; do
         msg="${BASH_REMATCH[4]}"
         check="${BASH_REMATCH[5]}"
         
-        clean_file=$(basename "$file")
+        # basename(파일명만 추출)을 제거하고 전체 상대 경로 유지
+        rel_file="${file#../}"
 
         # 확장자가 .c 로 끝나는 경우 순수 C 컴파일러 경고로 처리
         if [[ "$file" == *.c ]]; then
-            echo -e "${RED}[GCC 컴파일러 경고][${severity}]${RESET} src/${clean_file}:${line_num}: ${msg} (${check})"
+            echo -e "${RED}[GCC 컴파일러 경고][${severity}]${RESET} ${rel_file}:${line_num}: ${msg} (${check})"
         else
             # 그 외 C++ 파일(.cpp, .cc)은 Modern C++ 가이드라인으로 처리
             if [[ "$severity" == "error" ]]; then
-                echo -e "${RED}[C++ 가이드 치명오류][error]${RESET} src/${clean_file}:${line_num}: ${msg} (${check})"
+                echo -e "${RED}[C++ 가이드 치명오류][error]${RESET} ${rel_file}:${line_num}: ${msg} (${check})"
             else
-            	echo -e "${CYAN}[C++ 분석][${severity}]${RESET} src/${clean_file}:${line_num}: ${msg} ${YELLOW}(Rule: ${check})${RESET}"
-	    fi
+                echo -e "${CYAN}[C++ 분석][${severity}]${RESET} ${rel_file}:${line_num}: ${msg} ${YELLOW}(Rule: ${check})${RESET}"
+            fi
         fi
 
     # 컴파일러 및 린터의 상세 설명(note:) 라인 파싱
@@ -84,10 +88,13 @@ cmake --build build 2>&1 | while read -r line; do
         line_num="${BASH_REMATCH[2]}"
         msg="${BASH_REMATCH[3]}"
         
+        # 경로 정리
+        rel_file="${file#../}"
+        
         if [[ "$file" == *.c ]]; then
-            echo -e "   ${GRAY}└─ [컴파일러 참고노트] (line:${line_num}) ${msg}${RESET}"
+            echo -e "   ${GRAY}└─ [컴파일러 참고노트] (line:${line_num} | ${rel_file}) ${msg}${RESET}"
         else
-            echo -e "   ${GRAY}└─ [C++ 분석 참고노트] (line:${line_num}) ${msg}${RESET}"
+            echo -e "   ${GRAY}└─ [C++ 분석 참고노트] (line:${line_num} | ${rel_file}) ${msg}${RESET}"
         fi
 
     # -----------------------------------------------------------------
