@@ -1,0 +1,32 @@
+name: Protocol Sync Check
+
+# shared/protocol.h(사본)가 rpi 레포의 마스터와 동일한지 검증.
+# 다르면 PR 차단 → 조용한 프로토콜 버전 불일치(CRC/디코드 오류) 방지.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 1'   # 매주 월 00:00 UTC — rpi 마스터만 바뀌고 STM32 push 없을 때 대비
+
+jobs:
+  protocol-sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v5
+
+      - name: Fetch master protocol.h (rpi repo)
+        run: |
+          curl -fsSL -o /tmp/master_protocol.h \
+            https://raw.githubusercontent.com/VEDA-4th-Oppenheimer/rpi/main/shared/protocol.h
+
+      - name: Diff vs local copy (this repo is downstream)
+        run: |
+          if ! diff -u /tmp/master_protocol.h shared/protocol.h; then
+            echo "::error::shared/protocol.h 가 rpi 마스터(rpi/shared/protocol.h)와 다릅니다."
+            echo "::error::프로토콜 변경은 rpi 에서 먼저 → 이 사본을 동기화하세요."
+            exit 1
+          fi
+          echo "✅ protocol.h == rpi 마스터 (동기화됨)"
