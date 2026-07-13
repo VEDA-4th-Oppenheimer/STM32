@@ -17,11 +17,12 @@ BUILD_DIR="build/Debug"
 echo "==> [1/2] compile_commands.json 재생성 (arm-none-eabi)"
 cmake --preset Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >/dev/null
 
-echo "==> [2/2] cppcheck (우리 코드 Core/Src 대상)"
+echo "==> [2/2] cppcheck (우리 코드 대상; 벤더/생성물은 suppressions 로 제외)"
+# NOTE: --file-filter 대신 -i(벤더 스킵) + suppressions 로 필터.
+#       (--file-filter glob 은 cppcheck 버전마다 '/' 매칭이 달라 CI(구버전)에서 실패)
 cppcheck \
   --project="${BUILD_DIR}/compile_commands.json" \
-  --file-filter="*/App/*" \
-  --file-filter="*/Core/Src/main.c" \
+  -i Drivers \
   -D__GNUC__=15 \
   --enable=warning,style,performance,portability \
   --inline-suppr \
