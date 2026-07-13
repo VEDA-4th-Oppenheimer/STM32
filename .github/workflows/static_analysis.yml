@@ -3,41 +3,45 @@ name: Static Analysis Pipeline
 on:
   push:
     branches: [ main ]
-    # 👇 1. 아래에 명시된 파일들이 바뀔 때는 이 CI 파이프라인을 작동시키지 마라!
     paths-ignore:
-      - '**.md'                  # 모든 마크다운 파일 (README 등)
-      - 'docs/**'                 # 문서 폴더 내부 파일들
-    pull_request:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
     branches: [ main ]
-    # 👇 2. PR을 날릴 때도 문서만 바뀐 거라면 검사를 패스해라!
     paths-ignore:
       - '**.md'
       - 'docs/**'
 
 jobs:
-  static-analysis:
+  # ── 호스트측(데몬/샘플) 정적분석 : 루트 CMake + cppcheck 게이트 ──
+  host-analysis:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. 코드 체크아웃
       - name: Checkout Source Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2. 분석 도구 의존성 설치
       - name: Install Static Analysis Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cppcheck clang-tidy cmake build-essential
+          sudo apt-get install -y cppcheck cmake build-essential
 
-      # 3. 빌드 디렉터리 생성 및 daemon 폴더 타겟팅 (핵심 변경 라인)
-      - name: Configure CMake with Analysis Mode
+      - name: Configure & Analyze (cppcheck gate)
         run: |
-          mkdir build
-          cd build
-          cmake -DENABLE_STATIC_ANALYSIS=ON ..
+          # 강유근 호스트 하네스는 host_ci/ 에 보존 중 (추후 rpi repo 로 이동 예정)
+          cmake -S host_ci -B build_host -DENABLE_STATIC_ANALYSIS=ON
+          cmake --build build_host      # 지적사항 있으면 --error-exitcode=1 로 빌드 실패
 
-      # 4. 컴파일 및 2-Track 정적 분석 동시 수행
-      - name: Build and Run 2-Track Analysis
+  # ── STM32 펌웨어 정적분석 : arm 툴체인 + compile_commands 기반 cppcheck ──
+  firmware-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Toolchain & Analysis Tools
         run: |
-          cd build
-          make -j$(nproc)
+          sudo apt-get update
+          sudo apt-get install -y cppcheck cmake ninja-build gcc-arm-none-eabi
+
+      - name: Firmware cppcheck (Core/Src, -D__GNUC__, --error-exitcode=1)
+        run: bash tools/run_static_analysis.sh

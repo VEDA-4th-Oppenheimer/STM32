@@ -1,13 +1,28 @@
 # [VPT-VEDA] Build Outputs (Strict Rule)
 build/
+build_host/
 *.tar.gz
 *.so
 *.a
 *.o
 
-# STM32CubeMX & CLion IDE Tools
+# 정적분석 산출물 (경로 종속 — 절대 커밋 금지)
+compile_commands.json
+
+# STM32 펌웨어 빌드 산출물 (보통 build/ 아래지만 안전차원)
+*.elf
+*.map
+*.su
+*.hex
+*.bin
+
+# macOS
+.DS_Store
+
+# STM32CubeMX & CLion / clangd IDE Tools
 .idea/
 .cmake/
+.cache/
 CMakeLists.txt.user
 Documents/
 *.mxproject

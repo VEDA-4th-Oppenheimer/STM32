@@ -1,36 +1,72 @@
-cmake_minimum_required(VERSION 3.10)
-project(VEDA_ADTS_PROJECT C CXX)
+cmake_minimum_required(VERSION 3.22)
 
-# 1. 정적 분석 옵션 설정
-option(ENABLE_STATIC_ANALYSIS "Enable static analysis tools" OFF)
+#
+# This file is generated only once,
+# and is not re-generated if converter is called multiple times.
+#
+# User is free to modify the file as much as necessary
+#
 
-if(ENABLE_STATIC_ANALYSIS)
-    find_program(CPPCHECK_PATH cppcheck)
-    if(CPPCHECK_PATH)
-        # deamon/ 폴더에 위치한 suppressions 파일 경로 지정
-        set(CPPCHECK_SUPPRESSIONS "${CMAKE_SOURCE_DIR}/deamon/cppcheck_suppressions.txt")
-        
-        # Cppcheck 실행 인수 설정
-        set(CPPCHECK_ARGS 
-            "--enable=warning,style,performance,portability"
-            "--suppressions-list=${CPPCHECK_SUPPRESSIONS}"
-            "--inconclusive"
-            "--force"
-            "--inline-suppr"
-        )
-        
-        # C 및 C++ 타겟에 Cppcheck 적용
-        set(CMAKE_C_CPPCHECK "${CPPCHECK_PATH}" ${CPPCHECK_ARGS})
-        set(CMAKE_CXX_CPPCHECK "${CPPCHECK_PATH}" ${CPPCHECK_ARGS})
-    endif()
+# Setup compiler settings
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
+
+
+# Define the build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-# 2. 실행 파일 타겟 생성 (tree 구조 반영)
+# Set the project name
+set(CMAKE_PROJECT_NAME adts)
 
-# test1 폴더의 소스
-add_executable(add_push_main src/test1/add_push_main.c)
+# Enable compile command to ease indexing with e.g. clangd
+set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
-# test2 폴더의 소스
-add_executable(test_success_c src/test2/test_success_c.c)
-add_executable(test_success_c src/test3/test_c.c)
+# Core project settings
+project(${CMAKE_PROJECT_NAME})
+message("Build type: " ${CMAKE_BUILD_TYPE})
 
+# Enable CMake support for ASM and C languages
+enable_language(C ASM)
+
+# Create an executable object type
+add_executable(${CMAKE_PROJECT_NAME}
+        shared/protocol.h)
+
+# Add STM32CubeMX generated sources
+add_subdirectory(cmake/stm32cubemx)
+
+# Link directories setup
+target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    # Add user defined library search paths
+)
+
+# Add sources to executable
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    # Add user sources here
+    App/uart_rpi/uart_rpi.c
+)
+
+# Add include paths
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    # Add user defined include paths
+    ${CMAKE_SOURCE_DIR}/App/uart_rpi
+    ${CMAKE_SOURCE_DIR}/shared
+)
+
+# Add project symbols (macros)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    # Add user defined symbols
+)
+
+# Remove wrong libob.a library dependency when using cpp files
+list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
+
+# Add linked libraries
+target_link_libraries(${CMAKE_PROJECT_NAME}
+    stm32cubemx
+
+    # Add user defined libraries
+)

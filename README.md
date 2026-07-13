@@ -1,27 +1,119 @@
-A.D.T.S (Anti-Drone Tracking & Targeting System)
-Team Oppenheimer | VEDA 4기 최종 프로젝트
+# A.D.T.S — STM32 Firmware (`adts`)
 
-📝 프로젝트 개요
-본 프로젝트는 소형 드론의 불규칙한 고속 비행을 실시간으로 추적하고 정밀 타겟팅하기 위한 안티드론 통합 솔루션입니다. 고성능 영상 스트리밍 분석과 커널 레벨의 하드웨어 제어를 결합하여, 실시간 동기화 성능과 시스템 안정성을 최우선으로 설계되었습니다.
+**Anti-Drone Tracking & Targeting System** 의 STM32 펌웨어.
+RPi(엣지 서버)와 UART로 통신하며, 2축 스텝모터(방위/고각)·리밋 스위치·라이다(TOFSense-F2 P)를 실시간 제어한다.
 
-🏗️ 시스템 아키텍처
-카메라의 영상 데이터를 받아 비전 알고리즘으로 타겟을 추적하고, 커널 드라이버를 통해 터렛(Turret)의 방위각과 고각을 제어합니다.
+- **MCU**: STM32F401RE (NUCLEO)
+- **빌드**: CMake + arm-none-eabi-gcc (CubeMX의 CMake 생성)
+- **RPi 링크**: USART1 (PA9 TX / PA10 RX), 115200 8N1
+- **디버그**: USART2 (ST-Link VCP, `printf` 출력)
 
-🚀 주요 기능
-고속 데이터 파싱: 커널-사용자 공간 간 컨텍스트 스위칭 최소화를 위한 unlocked_ioctl 드라이버 설계.
-좌표 정밀 제어: 칼만 필터(Kalman Filter) 기반의 타겟 경로 예측 및 평활화 알고리즘 적용.
-보안 강화: TLS 기반 암호화 통신 및 정적 분석 가드레일 적용.
-연속성 보장: 24시간 장기 구동을 위한 메모리 누수 관리(CWE-401 차단).
+---
 
-🛡️ 품질 관리 및 가드레일 (QA)
-본 프로젝트는 코드 무결성을 위해 2-Track 정적 분석 파이프라인을 운영합니다.
-Track 1 (C): Cppcheck & MISRA C:2023 적용 (보안 위반 CWE-120 방지)
-Track 2 (C++): Clang-Tidy 적용 (Modern C++ 가이드라인 준수)
-CI/CD: GitHub Actions를 통해 PR 병합 전 정적 분석 검사를 강제합니다. (분석 실패 시 Merge 차단)
+## 📂 디렉토리 구조
 
-📦 개발 가이드라인
-Coding Convention: PascalCase(클래스), camelCase(함수/변수) 명명 규칙 등 Coding Convention을 준수합니다.
-Commit Policy: 기능 단위로 커밋하며, main 브랜치는 정적 분석을 통과한 코드만 머지 가능합니다.
-Static Analysis: 로컬 환경에서 ./build_run.sh clean을 통해 반드시 사전 검사를 수행하십시오.
+```
+.
+├── adts.ioc                 # CubeMX 설정 (HW single source — 반드시 커밋)
+├── CMakeLists.txt           # 프로젝트 CMake (유저 소스/인클루드 등록)
+├── CMakePresets.json        # Debug/Release 프리셋
+├── cmake/                   # arm-none-eabi 툴체인 파일
+├── startup_*.s  *.ld        # 스타트업 / 링커 스크립트
+│
+├── Core/                    # CubeMX 생성 (main.c 얇게 유지)
+│   ├── Inc/  Src/
+├── Drivers/                 # HAL / CMSIS (벤더)
+│
+├── App/                     # ★ 우리 앱 로직 (CubeMX 재생성에도 안전)
+│   ├── uart_rpi/            #   RPi UART 포트제어·프로토콜 디스패처  (이현우)
+│   ├── motor/               #   스텝모터·리밋 홈 캘리브레이션        (강유근)  ⏳
+│   └── lidar/               #   TOFSense-F2 P NLink 파서             (송영빈)  ⏳
+│
+├── shared/
+│   └── protocol.h           # ★ RPi↔STM32 통신 계약 (rpi repo에서 동기화)
+│
+├── tools/                   # 정적분석 설정
+│   ├── cppcheck_suppressions.txt
+│   ├── misra_rules.txt
+│   └── run_static_analysis.sh
+│
+├── .github/workflows/       # CI (정적분석 게이트)
+└── host_ci/                 # (임시) 호스트측 CI 하네스 — 추후 rpi repo 이관
+```
 
-본 프로젝트는 VEDA 프로젝트 정적 분석 및 예외 관리 가이드라인 및 Coding Convention을 준수합니다.
+### 설계 원칙: 3층 분리
+- **`Core/` · `Drivers/`** = CubeMX/벤더 생성. `.ioc` 재생성 시 덮어써짐 → 거의 안 건드린다.
+- **`App/`** = 우리 앱 로직. CubeMX가 안 건드리므로 여기서 모듈 개발.
+- **`shared/`** = 통신 계약(`protocol.h`). RPi 드라이버와 **동일 파일**을 공유한다.
+
+`main.c` 는 얇게 유지한다 — 초기화/메인루프/HAL 콜백에서 `App/` 모듈 함수만 호출한다.
+
+---
+
+## 🔨 빌드
+
+### 요구 도구
+- `arm-none-eabi-gcc` (권장 15.2 / Arm GNU Toolchain)
+- `cmake` (≥3.22), `ninja`
+- (편의) STM32CubeCLT 또는 STM32CubeIDE 1.15+
+
+### 명령
+```bash
+# 구성 + 빌드 (Debug 프리셋)
+cmake --preset Debug
+cmake --build build/Debug          # → build/Debug/adts.elf
+
+# 클린
+rm -rf build
+```
+
+### 플래시 / 디버그
+- **CubeIDE**: `adts.ioc` (또는 CMake 프로젝트) import 후 Run/Debug.
+- **CLI**: `STM32_Programmer_CLI -c port=SWD -w build/Debug/adts.elf -rst`
+- **VCP 로그**: USART2가 ST-Link VCP. `printf` 출력을 시리얼 터미널(115200)로 확인.
+  - macOS: `/dev/cu.usbmodem*` 사용 (`/dev/tty.*` 아님).
+
+---
+
+## 🛡️ 정적분석 (로컬에서 push 전 검사)
+
+```bash
+bash tools/run_static_analysis.sh      # repo 루트에서 실행
+```
+- `cmake --preset Debug` 로 `compile_commands.json` 생성 → `cppcheck` 실행.
+- **우리 코드(`App/`, `Core/Src/main.c`)만** 검사. 벤더/자동생성은 `tools/cppcheck_suppressions.txt` 로 제외.
+- CMSIS `#error Unknown compiler` 는 `-D__GNUC__` 정의로 회피.
+- **지적사항이 있으면 exit 1** → CI 게이트로 머지 차단.
+
+CI(`.github/workflows/static_analysis.yml`)가 push/PR 시 자동 실행한다.
+
+---
+
+## 🔗 protocol.h 동기화 규칙 (중요)
+
+`shared/protocol.h` 는 **RPi↔STM32 통신 계약**이며 **단일 원본은 `rpi` repo(`rpi/shared/protocol.h`)** 다.
+이 repo의 사본은 **다운스트림**이다.
+
+- 프로토콜을 바꿔야 하면 → **`rpi` repo에서 먼저 수정**하고, 이 사본을 맞춘다.
+- CI의 **drift-check** 가 두 파일이 다르면 PR을 **차단**한다 → 조용한 버전 불일치(CRC/디코드 오류) 방지.
+- 프레임: `[SOF(0xAA)][CMD][LEN][PAYLOAD][CRC16]`, CRC-16/CCITT-FALSE, `PROTO_VERSION=3`.
+
+---
+
+## 👥 모듈 담당 (CODEOWNERS)
+
+| 경로 | 담당 |
+|---|---|
+| `App/uart_rpi/`, `shared/` | 이현우 |
+| `App/motor/` | 강유근 |
+| `App/lidar/`, 메인루프·IWDG | 송영빈 |
+| `tools/`, `.github/` | 강유근 (QA) |
+
+---
+
+## ⚠️ 주의사항
+
+- **`.ioc` 는 반드시 커밋** (HW 설정 single source). `Core/`·`Drivers/` 생성물도 커밋해 재생성 없이 동일 빌드 보장.
+- **`build/`, `compile_commands.json`, `.mxproject`, `.idea/` 는 커밋 금지** (`.gitignore` 처리됨).
+- `.ioc` 는 **단일 파일 = 편집 병목**. 페리페럴 추가는 한 사람이 순차적으로(PR) — 동시 편집 시 merge 충돌.
+- 툴체인 버전(arm-none-eabi-gcc)은 팀이 통일한다.
