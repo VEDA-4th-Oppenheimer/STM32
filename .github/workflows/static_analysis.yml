@@ -13,25 +13,8 @@ on:
       - 'docs/**'
 
 jobs:
-  # ── 호스트측(데몬/샘플) 정적분석 : 루트 CMake + cppcheck 게이트 ──
-  host-analysis:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v5
-
-      - name: Install Static Analysis Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cppcheck cmake build-essential
-
-      - name: Configure & Analyze (cppcheck gate)
-        run: |
-          # 강유근 호스트 하네스는 host_ci/ 에 보존 중 (추후 rpi repo 로 이동 예정)
-          cmake -S host_ci -B build_host -DENABLE_STATIC_ANALYSIS=ON
-          cmake --build build_host      # 지적사항 있으면 --error-exitcode=1 로 빌드 실패
-
   # ── STM32 펌웨어 정적분석 : arm 툴체인 + compile_commands 기반 cppcheck ──
+  # (호스트측(데몬) 정적분석은 rpi repo 소관 — STM32 는 펌웨어 전용)
   firmware-analysis:
     runs-on: ubuntu-latest
     steps:
