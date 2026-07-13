@@ -1,4 +1,0 @@
-# .clang-tidy
-Checks: '-*,modernize-*,bugprone-*,cppcoreguidelines-*,readability-braces-around-statements'
-WarningsAsErrors: '*'
-HeaderFilterRegex: 'src/.*'
