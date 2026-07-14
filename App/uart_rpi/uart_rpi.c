@@ -4,6 +4,7 @@
  *  (main.c 에서 추출. 동작은 검증본과 동일 — printf 디버그 유지)
  * ==========================================================================*/
 #include "uart_rpi.h"
+#include "motor.h"        /* CMD_SET_TARGET/DISARM → 모터 구동 (테스트 경로) */
 #include <stdio.h>
 #include <string.h>
 
@@ -87,6 +88,7 @@ static void proto_feed(uint8_t b)
                     struct proto_target t;
                     memcpy(&t, &buf[PROTO_HEADER_LEN], sizeof(t));
                     printf("  SET_TARGET theta=%d phi=%d\r\n", t.theta_ddeg, t.phi_ddeg);
+                    motor_set_target(t.theta_ddeg, t.phi_ddeg);   /* → 모터 구동 */
                 }
                 break;
 
@@ -105,6 +107,7 @@ static void proto_feed(uint8_t b)
 
             case CMD_DISARM:
                 printf("  DISARM (스텝 2축 disable)\r\n");
+                motor_disarm();                                   /* → 모터 정지 */
                 break;
 
             case CMD_PING:

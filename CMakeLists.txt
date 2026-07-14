@@ -47,12 +47,14 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/uart_rpi/uart_rpi.c
+    App/motor/motor.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_SOURCE_DIR}/App/uart_rpi
+    ${CMAKE_SOURCE_DIR}/App/motor
     ${CMAKE_SOURCE_DIR}/shared
 )
 
