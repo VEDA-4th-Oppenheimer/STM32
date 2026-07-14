@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "uart_rpi.h"      /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
+#include "motor.h"         /* 스텝모터 2축 (테스트 스텁) */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -121,6 +122,7 @@ int main(void)
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
+  motor_init(&htim2, &htim3);              // 스텝모터 2축 (부팅 시 disarm)
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -128,6 +130,7 @@ int main(void)
   while (1)
   {
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
