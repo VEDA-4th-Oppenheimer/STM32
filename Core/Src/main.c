@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
@@ -40,6 +41,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+IWDG_HandleTypeDef hiwdg;
+
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
@@ -52,6 +55,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_IWDG_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -92,11 +96,19 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
   /* printf 버퍼링 끄기 — 임베디드 newlib 는 stdout 이 기본 full-buffered라
    * setvbuf 없으면 짧은 printf 가 버퍼에 갇혀 VCP 로 안 나온다. */
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
+
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != RESET) {
+    printf("IWDG 작동에 의해 하드웨어 리셋 후 재부팅되었습니다!\r\n");
+  } else {
+    printf("정상적인 전원 투입(POR) 또는 ST-Link 리셋으로 부팅되었습니다.\r\n");
+  }
+  __HAL_RCC_CLEAR_RESET_FLAGS();
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
   /* USER CODE END 2 */
@@ -106,6 +118,7 @@ int main(void)
   while (1)
   {
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    HAL_IWDG_Refresh(&hiwdg);             //IWDG 테스트시 주석처리
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -135,9 +148,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 16;
@@ -162,6 +176,34 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_4;
+  hiwdg.Init.Reload = 4095;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
+
 }
 
 /**
@@ -321,7 +363,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: printf("Wrong parameters value: file %s online %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
