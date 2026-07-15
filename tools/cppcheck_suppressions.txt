@@ -5,17 +5,17 @@
 #   * 아래는 우리가 손댈 수 없는 벤더/자동생성 코드라 검사에서 제외.
 # =====================================================================
 
-# --- 벤더: CMSIS / STM32 HAL 드라이버 (수정 불가 영역) ---
-*:*Drivers*
+# --- 1. 파서 설정 관련 에러만 허용 ---
+misra-config
 
-# --- ST/CubeMX 자동생성 보일러플레이트 (우리 로직 아님) ---
+# --- 2. 벤더 및 자동생성 코드 전체 제외 (우리가 수정 불가한 영역) ---
+*:*Drivers*
 *:*syscalls.c
 *:*sysmem.c
 *:*system_stm32f4xx.c
 *:*stm32f4xx_it.c
 *:*stm32f4xx_hal_msp.c
 
-# --- 시스템 인클루드 / 컴파일러 매크로 관련 노이즈 ---
-# (-D__GNUC__ 로 CMSIS 컴파일러 분기는 잡지만, 잔여 방지용)
+# --- 3. 시스템 매크로 노이즈 ---
 missingIncludeSystem
 preprocessorErrorDirective
