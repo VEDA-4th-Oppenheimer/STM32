@@ -9,25 +9,36 @@
 # 사용법:  ./tools/run_static_analysis.sh   (또는 bash tools/run_static_analysis.sh)
 # =====================================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."          # tools/ -> repo 루트
+cd "$(dirname "$0")/.."          # tools/ -> repo 루트로 이동
 
 SUPPRESS="tools/cppcheck_suppressions.txt"
 BUILD_DIR="build/Debug"
+MISRA_JSON="tools/misra.json"
 
-echo "==> [1/2] compile_commands.json 재생성 (arm-none-eabi)"
+echo "==> [1/3] MISRA 애드온 설정 파일 동적 생성"
+# tools/misra_rules.txt의 규칙 텍스트 정보를 참조하도록 json 자동 빌드
+cat <<EOF > "${MISRA_JSON}"
+{
+    "script": "misra.py",
+    "args": [
+        "--rule-texts=tools/misra_rules.txt"
+    ]
+}
+EOF
+
+echo "==> [2/3] compile_commands.json 재생성 (arm-none-eabi)"
 cmake --preset Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >/dev/null
 
-echo "==> [2/2] cppcheck (우리 코드 대상; 벤더/생성물은 suppressions 로 제외)"
-# NOTE: --file-filter 대신 -i(벤더 스킵) + suppressions 로 필터.
-#       (--file-filter glob 은 cppcheck 버전마다 '/' 매칭이 달라 CI(구버전)에서 실패)
+echo "==> [3/3] cppcheck (프로젝트 전체 검사 및 CWE/MISRA 탐지)"
 cppcheck \
   --project="${BUILD_DIR}/compile_commands.json" \
   -i Drivers \
   -D__GNUC__=15 \
   --enable=warning,style,performance,portability \
   --inline-suppr \
+  --addon="${MISRA_JSON}" \
   --suppressions-list="${SUPPRESS}" \
   --error-exitcode=1 \
-  --template="{severity}|{file}:{line}| {message} ({id})"
+  --template="{severity}|{file}:{line}| {message} ({id}) [CWE-{cwe}]"
 
 echo "==> 정적분석 통과 ✅"
