@@ -26,7 +26,9 @@
 #endif
 
 #if UART_RPI_DEBUG
+/* cppcheck-suppress misra-c2012-21.6 ; 디버그 빌드(UART_RPI_DEBUG=1) 한정 stdio deviation */
 #include <stdio.h>
+/* cppcheck-suppress misra-c2012-21.6 ; 디버그 빌드 한정 printf deviation */
 #define DBG(...)  ((void)printf(__VA_ARGS__))
 #else
 #define DBG(...)  ((void)0)
