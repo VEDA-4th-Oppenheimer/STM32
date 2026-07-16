@@ -6,8 +6,9 @@ build_host/
 *.a
 *.o
 
-# 정적분석 산출물 (경로 종속 — 절대 커밋 금지)
+# 정적분석 산출물 (경로 종속 / 런타임 생성 — 절대 커밋 금지)
 compile_commands.json
+tools/misra.json
 
 # STM32 펌웨어 빌드 산출물 (보통 build/ 아래지만 안전차원)
 *.elf
