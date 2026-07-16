@@ -1,21 +1,36 @@
 # =====================================================================
 # cppcheck 억제 목록 (VEDA ADTS)
 #   형식: id:파일글롭[:라인]  또는  id  또는  *:파일글롭
-#   * 우리 코드(Core/Src/main.c 등, 향후 uart_rpi/motor/lidar)만 검사 대상.
-#   * 아래는 우리가 손댈 수 없는 벤더/자동생성 코드라 검사에서 제외.
+#   검사 대상(우리 코드) = App/ (uart_rpi, motor, lidar, app_main) + shared/ (protocol.h)
+#   검사 제외          = Core/, Drivers/  (CubeMX/벤더 자동생성 — 우리가 MISRA 고칠 대상 아님)
 # =====================================================================
 
 # --- 1. 파서 설정 관련 에러만 허용 ---
 misra-config
 
-# --- 2. 벤더 및 자동생성 코드 전체 제외 (우리가 수정 불가한 영역) ---
+# --- 2. CubeMX/벤더 자동생성 코드 전체 제외 (우리가 수정 불가한 영역) ---
+#   Core/    = main.c/main.h/stm32f4xx_hal_conf.h/it.c/msp/syscalls/sysmem/system 등 생성물
+#   Drivers/ = HAL/CMSIS
+#   ※ main.c 는 생성코드+USER CODE 가 한 파일에 섞여 부분검사가 불가능하므로 제외한다.
+#     규율: main.c 의 USER CODE 는 App/ 함수 호출(얇은 글루)만 둔다. 실제 로직은
+#     App/uart_rpi·motor·lidar·app_main 에 작성해 정적검사를 받는다(§11 컨벤션).
+*:*Core/*
 *:*Drivers*
-*:*syscalls.c
-*:*sysmem.c
-*:*system_stm32f4xx.c
-*:*stm32f4xx_it.c
-*:*stm32f4xx_hal_msp.c
 
 # --- 3. 시스템 매크로 노이즈 ---
 missingIncludeSystem
 preprocessorErrorDirective
+
+# --- 4. 공유 계약 헤더(protocol.h) Advisory deviation ---
+#   게이트 정책 A: Required/Mandatory만 게이트, 아래 권고등급은 리포트만.
+#   protocol.h 는 RPi/커널/STM/모터가 공유하는 계약이라, 특정 컴포넌트(STM 펌웨어)가
+#   안 쓰는 심볼/매크로가 "미사용"으로 잡히는 것은 정상. (20.1 은 커널전용 ioctl include)
+misra-c2012-2.3:*shared/protocol.h
+misra-c2012-2.4:*shared/protocol.h
+misra-c2012-2.5:*shared/protocol.h
+misra-c2012-20.1:*shared/protocol.h
+
+# --- 5. motor 테스트 스텁 제외 (이현우 임시 테스트용) ---
+#   강유근 폐루프 모듈(motor.c/h)로 대체 예정. 실제 모듈 편입 시 재검토
+#   (GPIO/TIM 페리페럴 접근은 11.4/13.4 deviation 필요 예상 → 그때 정책 결정).
+*:*App/motor/*
