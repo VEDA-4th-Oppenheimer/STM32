@@ -33,7 +33,9 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
-        shared/protocol.h)
+        shared/protocol.h
+        App/lidar/lidar.h
+)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -48,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/uart_rpi/uart_rpi.c
     App/motor/motor.c
+    App/lidar/lidar.c
 )
 
 # Add include paths
@@ -55,6 +58,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_SOURCE_DIR}/App/uart_rpi
     ${CMAKE_SOURCE_DIR}/App/motor
+    ${CMAKE_SOURCE_DIR}/App/lidar
     ${CMAKE_SOURCE_DIR}/shared
 )
 

@@ -24,6 +24,8 @@
 #include <stdio.h>
 #include "uart_rpi.h"      /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 #include "motor.h"         /* 스텝모터 2축 (테스트 스텁) */
+#include "lidar.h"         /* 라이다 센서 드라이버 모듈 (송영빈) */
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -122,6 +124,7 @@ int main(void)
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
+  lidar_init(&huart6);                     // 📡 USART6(라이다 센서) 드라이버 기동 및 인터럽트 시작
   motor_init(&htim2, &htim3);              // 스텝모터 2축 (부팅 시 disarm)
   /* USER CODE END 2 */
 
@@ -131,14 +134,29 @@ int main(void)
   {
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
+    /* [임시 라이다 거리 체크 코드] */
+    static uint32_t last_print_tick = 0;
+    if (HAL_GetTick() - last_print_tick > 500)
+    {
+      uint16_t current_dist_mm = lidar_get_distance_mm();
+
+      // 1. 미터(m) 단위 쪼개기 (예: 1234mm -> 1m 와 234mm)
+      uint16_t m_whole = current_dist_mm / 1000;         // m 정수부
+      uint16_t m_fraction = current_dist_mm % 1000;      // m 소수부 (3자리)
+
+      // 2. 센티미터(cm) 단위 쪼개기 (예: 1234mm -> 123cm 와 4mm)
+      uint16_t cm_whole = current_dist_mm / 10;          // cm 정수부
+      uint16_t cm_fraction = current_dist_mm % 10;       // cm 소수부 (1자리)
+
+      // 💡 .%03u 구조는 소수점 자릿수를 무조건 3자리로 채워줍니다 (예: 5mm -> .005 m)
+      printf("[LiDAR] Distance: %u.%03u m (%u.%u cm)\r\n",
+             m_whole, m_fraction, cm_whole, cm_fraction);
+
+      last_print_tick = HAL_GetTick();
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /*
-    printf("boot ok, tick=%lu\r\n", HAL_GetTick());
-    HAL_Delay(1000);
-    */
-
   }
   /* USER CODE END 3 */
 }
@@ -566,10 +584,13 @@ int __io_putchar(int ch)
   return ch;
 }
 
-/* HAL 콜백 → uart_rpi 모듈로 위임 (실로직은 App/uart_rpi/) */
+/* HAL 콜백 → 등록된 각 모듈로 인터럽트 수신 위임 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   uart_rpi_on_rx_cplt(huart);
+
+  /*  라이다 수신 인터럽트 핸들러 매 바이트 호출 */
+  lidar_on_rx_cplt(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
