@@ -22,7 +22,7 @@
  *  UART_RPI_DEBUG 를 1 로 지정한다(그 경우 21.6 은 디버그 빌드 한정 deviation).
  * ------------------------------------------------------------------------- */
 #ifndef UART_RPI_DEBUG
-#define UART_RPI_DEBUG 0
+#define UART_RPI_DEBUG 1
 #endif
 
 #if UART_RPI_DEBUG

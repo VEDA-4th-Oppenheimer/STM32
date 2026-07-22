@@ -35,3 +35,7 @@ Documents/
 modules.order
 Module.symvers
 .tmp_versions/
+
+#추가발견
+cmake-build-debug/
+.idea/

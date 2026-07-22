@@ -67,18 +67,30 @@ void Error_Handler(void);
 #define USART_RX_GPIO_Port GPIOA
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
-#define PAN_DIR_Pin GPIO_PIN_0
-#define PAN_DIR_GPIO_Port GPIOB
+#define TILT_STEP_Pin GPIO_PIN_6
+#define TILT_STEP_GPIO_Port GPIOA
+#define TILT_DIR_Pin GPIO_PIN_7
+#define TILT_DIR_GPIO_Port GPIOA
 #define PAN_EN_Pin GPIO_PIN_1
 #define PAN_EN_GPIO_Port GPIOB
-#define TILT_DIR_Pin GPIO_PIN_2
-#define TILT_DIR_GPIO_Port GPIOB
-#define TILT_EN_Pin GPIO_PIN_12
-#define TILT_EN_GPIO_Port GPIOB
+#define TILT_DIRB10_Pin GPIO_PIN_10
+#define TILT_DIRB10_GPIO_Port GPIOB
+#define PAN_STEP_Pin GPIO_PIN_14
+#define PAN_STEP_GPIO_Port GPIOB
+#define PAN_DIR_Pin GPIO_PIN_15
+#define PAN_DIR_GPIO_Port GPIOB
+#define PAN_CAILI_SWITCH_Pin GPIO_PIN_8
+#define PAN_CAILI_SWITCH_GPIO_Port GPIOC
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
+#define TILT_EN_Pin GPIO_PIN_6
+#define TILT_EN_GPIO_Port GPIOB
+#define TILT_ENCODER_SCL_Pin GPIO_PIN_8
+#define TILT_ENCODER_SCL_GPIO_Port GPIOB
+#define TILT_ENCODER_SDA_Pin GPIO_PIN_9
+#define TILT_ENCODER_SDA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
