@@ -596,6 +596,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   uart_rpi_on_error(huart);
+  lidar_on_error(huart);
 }
 /* USER CODE END 4 */
 

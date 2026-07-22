@@ -1,15 +1,11 @@
-#ifndef APP_LIDAR_LIDAR_H_
-#define APP_LIDAR_LIDAR_H_
+#ifndef LIDAR_H
+#define LIDAR_H
 
-#include "main.h"
+#include "stm32f4xx_hal.h"   /* 프로젝트에서 쓰는 실제 HAL 헤더로 맞춰주세요 */
 
-/* 라이다 상태머신 초기화 및 인터럽트 시작 */
 void lidar_init(UART_HandleTypeDef *huart);
-
-/* 수신 완료된 최신 거리 값 반환 (mm 단위) */
+void lidar_on_rx_cplt(UART_HandleTypeDef *huart);
+void lidar_on_error(UART_HandleTypeDef *huart);
 uint16_t lidar_get_distance_mm(void);
 
-/* main.c의 HAL_UART_RxCpltCallback에서 호출해줄 라이다 전용 ISR 핸들러 */
-void lidar_on_rx_cplt(UART_HandleTypeDef *huart);
-
-#endif /* APP_LIDAR_LIDAR_H_ */
+#endif /* LIDAR_H */
