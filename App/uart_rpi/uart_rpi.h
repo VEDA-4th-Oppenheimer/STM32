@@ -31,9 +31,9 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
 
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA):
- *   theta(방위 0.1°), phi(고각 0.1°, 부호), d(거리 mm).
+ *   pan(방위 0.1°), tilt(고각 0.1°, 부호), d(거리 mm).
  *   내부 point 카운터(s_scan_count)를 1 증가시킨다. */
-void uart_rpi_send_scan_point(int16_t theta_ddeg, int16_t phi_ddeg, uint16_t d_mm);
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg, uint16_t d_mm);
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE):
  *   이번 스캔에서 상행한 총 point 수(내부 카운터)를 담아 전송.

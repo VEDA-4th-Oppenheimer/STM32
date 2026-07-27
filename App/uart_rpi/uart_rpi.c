@@ -3,7 +3,7 @@
  *  담당: 이현우
  *  (main.c 에서 추출. 동작은 검증본과 동일 — 디버그 트레이스는 DBG 매크로로 이관)
  *
- *  MISRA-C:2023 정리 완료:
+ *  MISRA-C:2012 정리 완료:
  *    - 21.6  : printf → DBG() 매크로(기본 컴파일아웃)
  *    - 17.7  : HAL/memcpy 반환값 (void) 캐스트
  *    - 15.5/15.6 : 단일 exit + 중괄호
@@ -16,7 +16,7 @@
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
- *  MISRA-C:2023 Rule 21.6 (표준 I/O 함수 금지) 대응.
+ *  MISRA-C:2012 Rule 21.6 (표준 I/O 함수 금지) 대응.
  *  기본값 0 → printf 자체가 컴파일아웃되어 정적분석/릴리즈에서 위반 없음.
  *  하드웨어 브링업 때 트레이스가 필요하면 이 파일 상단(또는 빌드 플래그)에서
  *  UART_RPI_DEBUG 를 1 로 지정한다(그 경우 21.6 은 디버그 빌드 한정 deviation).
@@ -71,11 +71,11 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가 */
 /* cppcheck-suppress misra-c2012-8.7 ; 공개 API — app_main 스캔 시퀀스에서 호출 예정 */
-void uart_rpi_send_scan_point(int16_t theta_ddeg, int16_t phi_ddeg, uint16_t d_mm)
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg, uint16_t d_mm)
 {
-    struct proto_scan_point pt = { .theta_ddeg = theta_ddeg,
-                                   .phi_ddeg   = phi_ddeg,
-                                   .d_mm       = d_mm };
+    struct proto_scan_point pt = { .pan_ddeg  = pan_ddeg,
+                                   .tilt_ddeg = tilt_ddeg,
+                                   .d_mm      = d_mm };
     uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
     s_scan_count++;
 }
@@ -115,9 +115,9 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
                 /* cppcheck-suppress misra-c2012-21.15 ; 와이어 바이트열→packed 역직렬화(합의 LE) */
                 (void)memcpy(&ss, &buf[PROTO_HEADER_LEN], sizeof(ss));
                 s_scan_count = 0u;              /* 스캔 point 카운터 리셋 */
-                DBG("  SCAN_START th[%d..%d] phi[%d..%d] step=%u\r\n",
-                    ss.theta_start_ddeg, ss.theta_end_ddeg,
-                    ss.phi_start_ddeg, ss.phi_end_ddeg, ss.step_ddeg);
+                DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
+                    ss.pan_start_ddeg, ss.pan_end_ddeg,
+                    ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
                 /* TODO(강유근/송영빈): motor/app_main 에 스캔 시퀀스 시작 요청
                  *   (ss 범위·격자로 팬·틸트 스윕 개시). uart_rpi 는 프레임만 담당.
                  *   각 점은 uart_rpi_send_scan_point(), 완료 시 uart_rpi_send_scan_done(). */
