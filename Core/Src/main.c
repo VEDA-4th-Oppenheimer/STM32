@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include "uart_rpi.h"      /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 #include "motor.h"         /* 스텝모터 2축 (테스트 스텁) */
+#include "hallEffectSensor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -123,24 +124,38 @@ int main(void)
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
   motor_init(&htim1, &htim3);  // 스텝모터 2축 (부팅 시 disarm)
+
+  Encoder_t g_pan_encoder; // PAN 엔코더 데이터
+  Encoder_t g_tilt_encoder; // TILT 엔코더 데이터
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
+    // Encoder_Read(&hi2c1, &g_pan_encoder); // Pan 각도 읽기
+    // Encoder_Read(&hi2c3, &g_tilt_encoder); // Tilt 각도 읽기
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /*
-    printf("boot ok, tick=%lu\r\n", HAL_GetTick());
-    HAL_Delay(1000);
-    */
-
+    if (Encoder_Read(&hi2c1, &g_tilt_encoder) == HAL_OK)
+    {
+      // g_pan_encoder.degree 변수에 읽어온 Pan 각도가 저장됩니다.
+      // 예: USART2 디버그 출력
+      printf("Tilt Angle: %.2f deg\r\n", g_tilt_encoder.degree);
+    }
+    HAL_Delay(100); // 10ms 주기 업데이트 (100Hz)
+    if (Encoder_Read(&hi2c3, &g_pan_encoder) == HAL_OK)
+    {
+      // g_pan_encoder.degree 변수에 읽어온 Pan 각도가 저장됩니다.
+      // 예: USART2 디버그 출력
+      printf("Pan Angle: %.2f deg\r\n", g_pan_encoder.degree);
+    }
+    HAL_Delay(100); // 10ms 주기 업데이트 (100Hz)
   }
-  /* USER CODE END 3 */
+    /* USER CODE END 3 */
 }
 
 /**
@@ -609,9 +624,9 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
-  }
+  // while (1)
+  // {
+  // }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
