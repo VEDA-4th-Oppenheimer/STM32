@@ -1,6 +1,6 @@
 #include "lidar.h"
 #include "lidar_parser.h"
-#include "calib.h"
+// #include "calib.h
 #include <stdio.h>
 
 /* 패킷 수신 진행 상태 */
@@ -15,6 +15,7 @@ static UART_HandleTypeDef *g_huart = NULL;
 static uint8_t              g_rx_byte = 0;
 static uint8_t              g_buf[LIDAR_PACKET_SIZE];
 static uint8_t              g_idx = 0;
+static volatile uint16_t    g_raw_dist_mm = 0; /* Raw 데이터 저장용 변수 추가 */
 
 /* ===== 내부 함수 선언 (UART/인터럽트 제어 전용) ===== */
 static void lidar_reset_rx(void);
@@ -33,7 +34,7 @@ void lidar_init(UART_HandleTypeDef *huart)
 
     g_huart = huart;
     lidar_reset_rx();
-    calib_reset();
+    // calib_reset();
 
     lidar_rearm_it();
 }
@@ -43,7 +44,8 @@ void lidar_init(UART_HandleTypeDef *huart)
  */
 uint16_t lidar_get_distance_mm(void)
 {
-    return calib_get_distance_mm();
+    // return calib_get_distance_mm();
+    return g_raw_dist_mm;
 }
 
 /**
@@ -87,7 +89,8 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
                 uint32_t raw_mm;
                 if (lidar_parser_validate(g_buf, &raw_mm))
                 {
-                    calib_process_distance(raw_mm);
+                    // calib_process_distance(raw_mm);
+                    g_raw_dist_mm = (uint16_t)raw_mm;   /* Raw 거리값 직접 저장 */
                 }
                 g_idx = 0;
             }

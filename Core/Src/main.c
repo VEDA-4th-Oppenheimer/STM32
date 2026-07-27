@@ -136,7 +136,7 @@ int main(void)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
     /* [임시 라이다 거리 체크 코드] */
     static uint32_t last_print_tick = 0;
-    if (HAL_GetTick() - last_print_tick > 500)
+    if (HAL_GetTick() - last_print_tick > 10) // 100 -> 0.1초, 1000 -> 1초
     {
       uint16_t current_dist_mm = lidar_get_distance_mm();
 
