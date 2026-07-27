@@ -133,10 +133,25 @@ int main(void)
   while (1)
   {
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
-    HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
+    /* 💡 조건부 IWDG Feed (하트비트 연동) */
+    uint32_t now = HAL_GetTick();
+    uint32_t last_hb = uart_rpi_get_last_hb_tick();
+
+    // 부팅 직후(첫 PING 수신 전)에는 초기화 유예 시간을 주거나,
+    // 부팅 완료 후 첫 PING을 받기 시작한 시점부터 타임아웃 검사
+    if (last_hb > 0 && (now - last_hb < HB_TIMEOUT_MS))
+    {
+      HAL_IWDG_Refresh(&hiwdg);          // 300ms 이내에 PING이 왔을 때만 워치독 먹임
+    }
+    else if (last_hb == 0 && now < 3000)
+    {
+      HAL_IWDG_Refresh(&hiwdg);          // 부팅 직후 3초간은 RPi 접속 대기를 위해 갱신 허용
+    }
+    // ➔ 만약 RPi 하트비트가 300ms 이상 끊기면 Refresh가 중단되어 IWDG 타임아웃으로 MCU HW 리셋 발생!
+
     /* [임시 라이다 거리 체크 코드] */
     static uint32_t last_print_tick = 0;
-    if (HAL_GetTick() - last_print_tick > 10) // 100 -> 0.1초, 1000 -> 1초
+    if (HAL_GetTick() - last_print_tick >= 10) // 100 -> 0.1초, 1000 -> 1초
     {
       uint16_t current_dist_mm = lidar_get_distance_mm();
 
@@ -587,16 +602,26 @@ int __io_putchar(int ch)
 /* HAL 콜백 → 등록된 각 모듈로 인터럽트 수신 위임 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  uart_rpi_on_rx_cplt(huart);
-
-  /*  라이다 수신 인터럽트 핸들러 매 바이트 호출 */
-  lidar_on_rx_cplt(huart);
+  if (huart->Instance == USART1)
+  {
+    uart_rpi_on_rx_cplt(huart);        // RPi 전용 포트
+  }
+  else if (huart->Instance == USART6)
+  {
+    lidar_on_rx_cplt(huart);           // 라이다 센서 전용 포트
+  }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  uart_rpi_on_error(huart);
-  lidar_on_error(huart);
+  if (huart->Instance == USART1)
+  {
+    uart_rpi_on_error(huart);
+  }
+  else if (huart->Instance == USART6)
+  {
+    lidar_on_error(huart);
+  }
 }
 /* USER CODE END 4 */
 

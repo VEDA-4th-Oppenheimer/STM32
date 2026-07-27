@@ -40,6 +40,7 @@ static volatile uint8_t    s_rx;           /* 1바이트 수신 버퍼 (IT)     
 static volatile uint8_t    s_rb[256];      /* 수신 링버퍼                  */
 static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
+static volatile uint32_t s_last_hb_tick = 0;
 
 /* protocol.h 프레임 빌드 → USART1 TX 전송 (상행) */
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
@@ -109,6 +110,7 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
             break;
 
         case CMD_DISARM:
+            s_last_hb_tick = HAL_GetTick();
             DBG("  DISARM (스텝 2축 disable)\r\n");
             motor_disarm();                             /* → 모터 정지 */
             break;
@@ -134,6 +136,11 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
     } else {
         DBG("CRC FAIL rx=%04X calc=%04X\r\n", rx_crc, calc);
     }
+}
+/* 외부(main.c)에서 마지막 하트비트 수신 후 경과 시간을 확인할 수 있는 함수 추가 */
+uint32_t uart_rpi_get_last_hb_tick(void)
+{
+    return s_last_hb_tick;
 }
 
 /* 바이트 스트림 → 프레임 파싱 (상태머신), 완성 시 proto_dispatch 호출 */

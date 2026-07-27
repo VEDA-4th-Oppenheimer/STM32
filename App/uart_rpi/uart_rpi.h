@@ -29,4 +29,6 @@ void uart_rpi_process(void);
 /* protocol.h 프레임 조립 후 USART1 로 상행 송신 (PONG/HOMED/DISTANCE ...). */
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
 
+uint32_t uart_rpi_get_last_hb_tick(void);
+
 #endif /* UART_RPI_H */
