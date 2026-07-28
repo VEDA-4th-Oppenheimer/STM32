@@ -1,6 +1,5 @@
 #include "lidar.h"
 #include "lidar_parser.h"
-#include <stdio.h>
 #include <stddef.h>
 
 /* 패킷 수신 진행 상태 */
