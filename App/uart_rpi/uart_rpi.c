@@ -3,7 +3,7 @@
  *  담당: 이현우
  *  (main.c 에서 추출. 동작은 검증본과 동일 — 디버그 트레이스는 DBG 매크로로 이관)
  *
- *  MISRA-C:2023 정리 완료:
+ *  MISRA-C:2012 정리 완료:
  *    - 21.6  : printf → DBG() 매크로(기본 컴파일아웃)
  *    - 17.7  : HAL/memcpy 반환값 (void) 캐스트
  *    - 15.5/15.6 : 단일 exit + 중괄호
@@ -12,11 +12,11 @@
  *    - 21.15 : (de)serialize memcpy 는 문서화된 deviation
  * ==========================================================================*/
 #include "uart_rpi.h"
-#include "motor.h"        /* CMD_SET_TARGET/DISARM → 모터 구동 (테스트 경로) */
+#include "motor.h"        /* CMD_DISARM → motor_disarm (스캔 시퀀스는 motor/app_main 소관) */
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
- *  MISRA-C:2023 Rule 21.6 (표준 I/O 함수 금지) 대응.
+ *  MISRA-C:2012 Rule 21.6 (표준 I/O 함수 금지) 대응.
  *  기본값 0 → printf 자체가 컴파일아웃되어 정적분석/릴리즈에서 위반 없음.
  *  하드웨어 브링업 때 트레이스가 필요하면 이 파일 상단(또는 빌드 플래그)에서
  *  UART_RPI_DEBUG 를 1 로 지정한다(그 경우 21.6 은 디버그 빌드 한정 deviation).
@@ -42,6 +42,7 @@ static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
 static volatile uint32_t s_last_hb_tick = 0;
 
+static uint32_t s_scan_count = 0; /* SCAN 시작할 때 point count 초기화 */
 /* protocol.h 프레임 빌드 → USART1 TX 전송 (상행) */
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
 {
@@ -70,6 +71,25 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
     }
 }
 
+/* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가 */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — app_main 스캔 시퀀스에서 호출 예정 */
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg, uint16_t d_mm)
+{
+    struct proto_scan_point pt = { .pan_ddeg  = pan_ddeg,
+                                   .tilt_ddeg = tilt_ddeg,
+                                   .d_mm      = d_mm };
+    uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
+    s_scan_count++;
+}
+
+/* 스캔 완료 통지 (CMD_SCAN_DONE): 상행한 총 point 수 전송 */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — app_main 스캔 완료 시 호출 예정 */
+void uart_rpi_send_scan_done(void)
+{
+    struct proto_scan_done d = { .point_count = s_scan_count };
+    uart_rpi_send_frame(CMD_SCAN_DONE, &d, (uint8_t)sizeof(d));
+}
+
 /* 완성된 프레임(buf[0..flen-1]) CRC 검증 후 CMD 디스패치 */
 static void proto_dispatch(const uint8_t *buf, uint8_t flen)
 {
@@ -85,28 +105,30 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
         DBG("  CRC OK, cmd=0x%02X\r\n", cmd);
 
         switch (cmd) {
-        case CMD_SET_TARGET:
-            if (len == sizeof(struct proto_target)) {
-                struct proto_target t;
-                /* cppcheck-suppress misra-c2012-21.15 ; 와이어 바이트열→packed 구조체 역직렬화(합의 LE) */
-                (void)memcpy(&t, &buf[PROTO_HEADER_LEN], sizeof(t));
-                DBG("  SET_TARGET theta=%d phi=%d\r\n", t.theta_ddeg, t.phi_ddeg);
-                motor_set_target(t.theta_ddeg, t.phi_ddeg);   /* → 모터 구동 */
-            }
-            break;
 
         case CMD_HOME:
             DBG("  HOME (모터부 담당) -> HOMED 회신\r\n");
             uart_rpi_send_frame(CMD_HOMED, NULL, 0u);   /* 상행 경로 검증용 */
             break;
 
-        case CMD_SET_MODE:
-            if (len == sizeof(struct proto_mode)) {
-                struct proto_mode m;
-                /* cppcheck-suppress misra-c2012-21.15 ; 역직렬화(합의 LE) */
-                (void)memcpy(&m, &buf[PROTO_HEADER_LEN], sizeof(m));
-                DBG("  SET_MODE mode=%u\r\n", m.mode);
+        case CMD_SCAN_START:
+            if (len == sizeof(struct proto_scan_start)) {
+                struct proto_scan_start ss;
+                /* cppcheck-suppress misra-c2012-21.15 ; 와이어 바이트열→packed 역직렬화(합의 LE) */
+                (void)memcpy(&ss, &buf[PROTO_HEADER_LEN], sizeof(ss));
+                s_scan_count = 0u;              /* 스캔 point 카운터 리셋 */
+                DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
+                    ss.pan_start_ddeg, ss.pan_end_ddeg,
+                    ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
+                /* TODO(강유근/송영빈): motor/app_main 에 스캔 시퀀스 시작 요청
+                 *   (ss 범위·격자로 팬·틸트 스윕 개시). uart_rpi 는 프레임만 담당.
+                 *   각 점은 uart_rpi_send_scan_point(), 완료 시 uart_rpi_send_scan_done(). */
             }
+            break;
+
+        case CMD_SCAN_STOP:
+            DBG("  SCAN_STOP\r\n");
+            /* TODO(강유근/송영빈): 스캔 시퀀스 중단 요청 (motor 정지) */
             break;
 
         case CMD_DISARM:
@@ -120,14 +142,7 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
             DBG("  PING -> PONG\r\n");
             break;
 
-        case CMD_QUERY_DIST:
-        {
-            /* 라이다 미연결: 더미 거리로 상행 경로 검증 */
-            struct proto_distance d = { .distance_mm = 2221u };
-            uart_rpi_send_frame(CMD_DISTANCE, &d, (uint8_t)sizeof(d));
-            DBG("  QUERY_DIST -> DISTANCE %u mm (dummy)\r\n", d.distance_mm);
-        }
-            break;
+
 
         default:
             DBG("  (unhandled cmd 0x%02X)\r\n", cmd);
