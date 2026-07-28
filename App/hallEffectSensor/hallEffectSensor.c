@@ -10,7 +10,7 @@
 
 HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
 {
-    if (hi2c == NULL || encoder_data == NULL) {
+    if ((hi2c == NULL) || (encoder_data == NULL)) {
         return HAL_ERROR;
     }
 
@@ -18,8 +18,8 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
 
 
     // 0x03 레지스터부터 2바이트 읽기 (I2C1: PA8/PC9)
-    HAL_StatusTypeDef status = HAL_I2C_Mem_Read(hi2c, MT6701_ADDR, REG_ANGLE_14B,
-                              I2C_MEMADD_SIZE_8BIT, rx_buf, 2, I2C_TIMEOUT);
+    HAL_StatusTypeDef status = HAL_I2C_Mem_Read(hi2c, (uint16_t)MT6701_ADDR, (uint16_t)REG_ANGLE_14B,
+                              I2C_MEMADD_SIZE_8BIT, rx_buf, (uint16_t)2u, (uint32_t)I2C_TIMEOUT);
 
     if (status == HAL_OK) {
         // rx_buf[0]: 상위 비트[13:6], rx_buf[1]: 하위 비트[7:2]
