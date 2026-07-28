@@ -22,9 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "uart_rpi.h"      /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
-#include "motor.h"         /* 스텝모터 2축 (테스트 스텁) */
-#include "hallEffectSensor.h"
+#include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
+#include "motor.h"              /* 스텝모터 2축 (강유근) */
+#include "hallEffectSensor.h"   /* 홀센서 (강유근) */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
