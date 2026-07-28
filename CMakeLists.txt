@@ -33,7 +33,9 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
-        shared/protocol.h)
+        shared/protocol.h
+)
+
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -48,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/uart_rpi/uart_rpi.c
     App/motor/motor.c
+    App/hallEffectSensor/hallEffectSensor.c
 )
 
 # Add include paths
@@ -55,6 +58,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_SOURCE_DIR}/App/uart_rpi
     ${CMAKE_SOURCE_DIR}/App/motor
+    ${CMAKE_SOURCE_DIR}/App/hallEffectSensor
     ${CMAKE_SOURCE_DIR}/shared
 )
 
@@ -72,3 +76,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+# Hall Effact Sensor용 부동소수점 링커 옵션 추가(printf 디버깅용)
+target_link_options(${PROJECT_NAME} PRIVATE -u _printf_float)
