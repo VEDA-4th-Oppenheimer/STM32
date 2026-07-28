@@ -148,7 +148,6 @@ int main(void)
       HAL_IWDG_Refresh(&hiwdg);          // 부팅 직후 3초간은 RPi 접속 대기를 위해 갱신 허용
     }
     // ➔ 만약 RPi 하트비트가 300ms 이상 끊기면 Refresh가 중단되어 IWDG 타임아웃으로 MCU HW 리셋 발생!
-
     /* [임시 라이다 거리 체크 코드] */
     static uint32_t last_print_tick = 0;
     if (HAL_GetTick() - last_print_tick >= 10) // 100 -> 0.1초, 1000 -> 1초

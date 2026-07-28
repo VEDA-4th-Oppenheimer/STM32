@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define LIDAR_HEADER          0x57
-#define LIDAR_FUNC_MARK       0x00
-#define LIDAR_PACKET_SIZE     16
+#define LIDAR_HEADER          0x57U
+#define LIDAR_FUNC_MARK       0x00U
+#define LIDAR_PACKET_SIZE     16U
 
 /**
  * @brief 헤더 바이트(0x57)가 맞는지 검사
