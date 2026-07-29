@@ -1,10 +1,6 @@
 #ifndef ENCODER_H
 #define ENCODER_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* STM32F4 HAL 라이브러리 헤더 */
 #include "stm32f4xx_hal.h"
 
@@ -24,18 +20,15 @@ typedef struct {
 } Encoder_t;
 
 /* -------------------------------------------------------------------------- */
-/* 함수 원형 선언                                                             */
-/* -------------------------------------------------------------------------- */
-/**
+/* 함수 원형 선언
+ *
  * @brief MT6701 엔코더로부터 각도를 읽어옵니다.
  * @param hi2c 연결된 I2C 핸들 포인터 (&hi2c1)
  * @param encoder_data 결과값을 저장할 구조체 포인터
  * @return HAL_StatusTypeDef 통신 성공 여부 (HAL_OK)
- */
+ *-------------------------------------------------------------------------- */
 HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif /*ENCODER_H*/

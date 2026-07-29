@@ -56,7 +56,16 @@ UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
+/* 모터 현제 각도 저장용 전역변수 */
+float g_pan_target_deg  = 0.0f;
+float g_tilt_target_deg = 0.0f;
 
+// 3초 왕복 및 타이머 관리를 위한 변수 선언
+uint32_t current_time = 0;
+uint32_t last_toggle_time = 0;
+uint32_t last_encoder_time = 0; // 추가: 엔코더 주기에 사용할 변수
+uint32_t last_print_time = 0;   // 추가: 디버그 출력 주기에 사용할 변수
+uint8_t target_state = 0;       // 0: 원점, 1: 100도
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -123,39 +132,52 @@ int main(void)
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
-  motor_init(&htim1, &htim3);  // 스텝모터 2축 (부팅 시 disarm)
-
-  Encoder_t g_pan_encoder; // PAN 엔코더 데이터
-  Encoder_t g_tilt_encoder; // TILT 엔코더 데이터
+  MotorController_t g_motor_ctrl;
+  motor_init(&g_motor_ctrl, &htim1, &htim3, &hi2c3, &hi2c1);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
-    uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
-    HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기 (안 하면 1초마다 리셋)
-    // Encoder_Read(&hi2c1, &g_pan_encoder); // Pan 각도 읽기
-    // Encoder_Read(&hi2c3, &g_tilt_encoder); // Tilt 각도 읽기
+
+    //
+    // uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    // HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
+    //
+    // // 3초 왕복 및 타이머 관리를 위한 변수 선언
+    // current_time = HAL_GetTick();
+    //
+    // // 1. 3초마다 타겟 위치 전환
+    // if (current_time - last_toggle_time >= 5000) {
+    //   last_toggle_time = current_time;
+    //   if (target_state == 0) {
+    //     motor_set_target(100, 100); // 이동
+    //     target_state = 1;
+    //   } else {
+    //     motor_set_target(0, 0);       // 원점 복귀
+    //     target_state = 0;
+    //   }
+    // }
+    //
+    // // 2. 엔코더 읽기 및 모터 제어 (매 2ms마다 고속 실행)
+    // if (current_time - last_encoder_time >= 2) {
+    //   last_encoder_time = current_time;
+    //   motor_update_position(&g_motor_ctrl, g_pan_target_deg, g_tilt_target_deg);
+    // }
+    //
+    // // 3. 디버그 출력 (출력 주기를 500ms로 낮춰 디버그 병목 방지)
+    // if (current_time - last_print_time >= 1000) {
+    //   last_print_time = current_time;
+    //   printf("Pan Current: %.2f deg / Target: %.2f deg\r\n",
+    //          g_motor_ctrl.pan_encoder.degree, g_pan_target_deg);
+    // }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (Encoder_Read(&hi2c1, &g_tilt_encoder) == HAL_OK)
-    {
-      // g_pan_encoder.degree 변수에 읽어온 Pan 각도가 저장됩니다.
-      // 예: USART2 디버그 출력
-      printf("Tilt Angle: %.2f deg\r\n", g_tilt_encoder.degree);
-    }
-    HAL_Delay(100); // 10ms 주기 업데이트 (100Hz)
-    if (Encoder_Read(&hi2c3, &g_pan_encoder) == HAL_OK)
-    {
-      // g_pan_encoder.degree 변수에 읽어온 Pan 각도가 저장됩니다.
-      // 예: USART2 디버그 출력
-      printf("Pan Angle: %.2f deg\r\n", g_pan_encoder.degree);
-    }
-    HAL_Delay(100); // 10ms 주기 업데이트 (100Hz)
+
   }
-    /* USER CODE END 3 */
+  /* USER CODE END 3 */
 }
 
 /**
@@ -221,7 +243,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.ClockSpeed = 400000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -255,7 +277,7 @@ static void MX_I2C3_Init(void)
 
   /* USER CODE END I2C3_Init 1 */
   hi2c3.Instance = I2C3;
-  hi2c3.Init.ClockSpeed = 100000;
+  hi2c3.Init.ClockSpeed = 400000;
   hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c3.Init.OwnAddress1 = 0;
   hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -324,7 +346,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 84-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 10000-1;
+  htim1.Init.Period = 30000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -398,7 +420,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 84-1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 10000-1;
+  htim3.Init.Period = 30000-1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)

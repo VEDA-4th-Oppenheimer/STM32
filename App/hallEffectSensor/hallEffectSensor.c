@@ -6,12 +6,12 @@
  * ==========================================================================*/
 
 #include "hallEffectSensor.h"
-#include <stddef.h>
+
 
 HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
 {
     HAL_StatusTypeDef status = HAL_ERROR;
-    if ((hi2c != NULL) || (encoder_data != NULL)) {
+    if ((hi2c != NULL) && (encoder_data != NULL)) {
         uint8_t rx_buf[2] = {0};
 
 
@@ -27,9 +27,5 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
             encoder_data->degree = (float)raw * (360.0f / 16384.0f);
         }
     }
-
-
-
-
     return status;
 }
