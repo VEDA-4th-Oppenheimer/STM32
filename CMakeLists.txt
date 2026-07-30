@@ -37,6 +37,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         App/lidar/lidar.h
         App/lidar/lidar_parser.h
         App/calib/calib.h
+        App/scan/scan.h
+        App/lidar/lidar.h
 )
 
 # Add STM32CubeMX generated sources
@@ -55,6 +57,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/lidar/lidar.c
         App/lidar/lidar_parser.c
         App/calib/calib.c
+        App/scan/scan.c
 )
 
 # Add include paths
@@ -64,6 +67,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_SOURCE_DIR}/App/motor
         ${CMAKE_SOURCE_DIR}/App/lidar
         ${CMAKE_SOURCE_DIR}/App/calib
+        ${CMAKE_SOURCE_DIR}/App/scan
         ${CMAKE_SOURCE_DIR}/shared
 )
 
