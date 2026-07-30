@@ -173,37 +173,33 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
 
                     if ((uint32_t)g_idx >= (uint32_t)LIDAR_PACKET_SIZE)
                     {
-                        lidar_parsed_data_t parsed;
-
-                        if (lidar_parser_validate(g_buf, HAL_GetTick(), &parsed) != false)
                         lidar_sample_t smp = {0};
                         const bool ok = lidar_parser_validate(g_buf, &smp);
+
                         if (ok == false)
                         {
                             g_bad_pkts++;       /* 진단: 검증 실패 */
                         }
-                        if (ok != false)
+                        else
                         {
                             g_valid_pkts++;     /* 진단: 유효 패킷 */
                             /* TODO: calib 모듈 재활성화 시 아래로 교체
-                             *   g_raw_dist_mm = calib_process_distance(parsed.raw_mm);
+                             *   g_raw_dist_mm = calib_process_distance(smp.raw_mm);
                              * 현재는 오프셋 보정/EMA 필터 없이 raw 값을 그대로 사용 중 */
 #if 0
-                            g_raw_dist_mm = calib_process_distance(parsed.raw_mm);
                             g_raw_dist_mm = calib_process_distance(smp.raw_mm);
 #else
-                            g_raw_dist_mm = (uint16_t)parsed.raw_mm;   /* Raw 거리값 직접 저장 */
-                            g_raw_dist_mm = (uint16_t)smp.raw_mm;  /* Raw 거리값 직접 저장 */
+                            g_raw_dist_mm = (uint16_t)smp.raw_mm;   /* Raw 거리값 직접 저장 */
 #endif
                             /* 스캔용 도착 통지 (이현우 추가).
                              * 이 시점이 "라이다 프레임 도착 순간" = 각도 래치 기준. */
                             if (g_sample_cb != NULL) {
                                 g_sample_cb(&smp);
                             }
-                            g_dis_status  = parsed.status;
-                            g_intensity    = parsed.intensity;
-                            g_sys_time_ms  = parsed.system_time_ms;
-                            g_confidence   = parsed.confidence;
+                            g_dis_status  = smp.dis_status;
+                            g_intensity   = smp.signal_strength;
+                            g_sys_time_ms = (uint16_t)(smp.device_time_ms & 0xFFFFU);
+                            g_confidence  = smp.confidence;
                         }
                         g_idx = 0U;
                     }

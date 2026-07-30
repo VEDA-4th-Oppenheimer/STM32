@@ -70,8 +70,6 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_I2C2_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_IWDG_Init(void);
@@ -129,8 +127,6 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
-  MX_I2C2_Init();
-  MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART6_UART_Init();
   MX_IWDG_Init();
@@ -203,18 +199,22 @@ int main(void)
     if ((scan_is_busy() == 0u) && ((HAL_GetTick() - last_print_tick) >= 1000u))
     {
       uint16_t d = lidar_get_distance_mm();
+      uint8_t  st = lidar_get_dis_status();
+      uint16_t inten = lidar_get_intensity();
+      uint16_t stime = lidar_get_system_time_ms();
+      lidar_confidence_t conf = lidar_get_confidence();
       uint32_t rx = 0, ok = 0, bad = 0;
       uint8_t  rc = 0; uint32_t rxst = 0, errc = 0;
       lidar_get_diag(&rx, &ok, &bad);
       lidar_get_uart_diag(&rc, &rxst, &errc);
 
-      printf("[LiDAR] d=%u.%03u m | rx=%lu ok=%lu bad=%lu"
-             " | rc=%u rxst=0x%02lX err=0x%lX\r\n",
+      printf("[LiDAR] d=%u.%03u m | status=%u intensity=%u sys_t=%ums conf=%s"
+             " | rx=%lu ok=%lu bad=%lu | rc=%u rxst=0x%02lX err=0x%lX\r\n",
              d / 1000u, d % 1000u,
+             st, inten, stime, lidar_confidence_to_str(conf),
              (unsigned long)rx, (unsigned long)ok, (unsigned long)bad,
              (unsigned)rc, (unsigned long)rxst, (unsigned long)errc);
 
-      /* [브링업 진단] RPi 링크(USART1) — PING/PONG 이 어디서 끊기는지 판별 */
       {
         uint32_t prx = 0, pfr = 0, pcrc = 0, ptx = 0;
         uart_rpi_get_diag(&prx, &pfr, &pcrc, &ptx);
@@ -223,9 +223,6 @@ int main(void)
                (unsigned long)pcrc, (unsigned long)ptx);
       }
 
-      /* 스캔 품질 — 유실이 있을 때만 경고로 띄운다.
-       * dropped>0 = FIFO 오버런 = 메인루프가 밀렸다는 뜻.
-       * ⚠️ 버려진 점은 RPi 로 전송조차 안 되므로 여기서만 보인다. */
       uint32_t sent = 0, dropped = 0;
       scan_get_stats(&sent, &dropped);
       if (dropped > 0u)
@@ -234,25 +231,7 @@ int main(void)
                (unsigned long)dropped, (unsigned long)sent);
       }
 
-    if (HAL_GetTick() - last_print_tick > 10)
-    {
-      uint16_t current_dist_mm  = lidar_get_distance_mm();
-      uint8_t  current_status   = lidar_get_dis_status();
-      uint16_t current_intensity = lidar_get_intensity();
-      uint16_t current_systime   = lidar_get_system_time_ms();
-      lidar_confidence_t current_conf = lidar_get_confidence();
-
-      uint16_t m_whole = current_dist_mm / 1000;
-      uint16_t m_fraction = current_dist_mm % 1000;
-      uint16_t cm_whole = current_dist_mm / 10;
-      uint16_t cm_fraction = current_dist_mm % 10;
-
-      printf("[LiDAR] %u.%03u m (%u.%u cm) | status=%u intensity=%u sys_t=%ums conf=%s\r\n",
-             m_whole, m_fraction, cm_whole, cm_fraction,
-             current_status, current_intensity, current_systime,
-             lidar_confidence_to_str(current_conf));
-
-      last_print_tick = HAL_GetTick();
+      last_print_tick = HAL_GetTick();   /* ← 원래 코드에 누락돼 있었음 */
     }
     /* USER CODE END WHILE */
 
