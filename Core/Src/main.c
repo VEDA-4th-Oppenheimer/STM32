@@ -4,16 +4,6 @@
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -23,8 +13,10 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
-#include "motor.h"              /* 스텝모터 2축 (강유근) */
+
 #include "hallEffectSensor.h"   /* 홀센서 (강유근) */
+#include "step_motor.h"         /* 신규 스텝모터 제어 (Pan/Tilt 2축) */
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,23 +41,14 @@ I2C_HandleTypeDef hi2c3;
 IWDG_HandleTypeDef hiwdg;
 
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
-/* 모터 현제 각도 저장용 전역변수 */
-float g_pan_target_deg  = 0.0f;
-float g_tilt_target_deg = 0.0f;
 
-// 3초 왕복 및 타이머 관리를 위한 변수 선언
-uint32_t current_time = 0;
-uint32_t last_toggle_time = 0;
-uint32_t last_encoder_time = 0; // 추가: 엔코더 주기에 사용할 변수
-uint32_t last_print_time = 0;   // 추가: 디버그 출력 주기에 사용할 변수
-uint8_t target_state = 0;       // 0: 원점, 1: 100도
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,11 +57,11 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_I2C3_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -120,58 +103,61 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
-  MX_TIM3_Init();
   MX_USART6_UART_Init();
   MX_IWDG_Init();
   MX_I2C3_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  /* printf 버퍼링 끄기 — 임베디드 newlib 는 stdout 이 기본 full-buffered라
-   * setvbuf 없으면 짧은 printf 가 버퍼에 갇혀 VCP 로 안 나온다. */
+
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
-  MotorController_t g_motor_ctrl;
-  motor_init(&g_motor_ctrl, &htim1, &htim3, &hi2c3, &hi2c1);
 
+
+  // 신규 스텝 모터 초기화 및 구동 활성화
+  step_motor_init();
+
+  // Pan / Tilt 타이머 인터럽트 시작 (CubeMX에서 해당 타이머 NVIC 활성화 필수)
+  HAL_TIM_Base_Start_IT(&htim1);
+  HAL_TIM_Base_Start_IT(&htim2);
+
+
+  // =========================================================
+  // [추가] 라즈베리파이 없이 단독 자동 구동 시퀀스
+  // =========================================================
+  printf("Auto-Homing Start...\r\n");
+  step_motor_home(); // 1. Homing 명령 인가
+
+  // Homing이 완료(is_homed == 1)될 때까지 대기
+  // (인터럽트로 모터가 제어되므로 여기서 대기해도 모터는 정상 동작합니다)
+  while (motor_ctrl->is_homed == 0) {
+    HAL_IWDG_Refresh(&hiwdg); // 대기 중 워치독 리셋 방지
+  }
+  printf("Auto-Homing Done!\r\n");
+
+  // 2. 가상의 스캔 데이터 설정 (단위: 0.1도 단위, ddeg)
+  struct proto_scan_start auto_scan_cmd;
+  auto_scan_cmd.pan_start_ddeg  = 0; // -45.0도부터 시작
+  auto_scan_cmd.pan_end_ddeg    =  3600; // +45.0도까지
+  auto_scan_cmd.tilt_start_ddeg =  -900;   // 0.0도부터 시작
+  auto_scan_cmd.tilt_end_ddeg   =  900; // 90.0도까지
+  auto_scan_cmd.step_ddeg       =  90; // 10.0도 간격으로 이동
+
+  printf("Auto-Scan Start...\r\n");
+  step_motor_scan_start(&auto_scan_cmd); // 스캔 시작 명령 인가
+  // =========================================================
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
 
-    //
-    // uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
-    // HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
-    //
-    // // 3초 왕복 및 타이머 관리를 위한 변수 선언
-    // current_time = HAL_GetTick();
-    //
-    // // 1. 3초마다 타겟 위치 전환
-    // if (current_time - last_toggle_time >= 5000) {
-    //   last_toggle_time = current_time;
-    //   if (target_state == 0) {
-    //     motor_set_target(100, 100); // 이동
-    //     target_state = 1;
-    //   } else {
-    //     motor_set_target(0, 0);       // 원점 복귀
-    //     target_state = 0;
-    //   }
-    // }
-    //
-    // // 2. 엔코더 읽기 및 모터 제어 (매 2ms마다 고속 실행)
-    // if (current_time - last_encoder_time >= 2) {
-    //   last_encoder_time = current_time;
-    //   motor_update_position(&g_motor_ctrl, g_pan_target_deg, g_tilt_target_deg);
-    // }
-    //
-    // // 3. 디버그 출력 (출력 주기를 500ms로 낮춰 디버그 병목 방지)
-    // if (current_time - last_print_time >= 1000) {
-    //   last_print_time = current_time;
-    //   printf("Pan Current: %.2f deg / Target: %.2f deg\r\n",
-    //          g_motor_ctrl.pan_encoder.degree, g_pan_target_deg);
-    // }
+    uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -337,8 +323,6 @@ static void MX_TIM1_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
 
@@ -346,7 +330,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 84-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 30000-1;
+  htim1.Init.Period = 2500-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -359,101 +343,60 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 500;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
 
 }
 
 /**
-  * @brief TIM3 Initialization Function
+  * @brief TIM2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM3_Init(void)
+static void MX_TIM2_Init(void)
 {
 
-  /* USER CODE BEGIN TIM3_Init 0 */
+  /* USER CODE BEGIN TIM2_Init 0 */
 
-  /* USER CODE END TIM3_Init 0 */
+  /* USER CODE END TIM2_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
+  /* USER CODE BEGIN TIM2_Init 1 */
 
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 84-1;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 30000-1;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 84-1;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 1250-1;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 500;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM3_Init 2 */
+  /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* USER CODE END TIM3_Init 2 */
-  HAL_TIM_MspPostInit(&htim3);
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -575,10 +518,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|TILT_DIRB10_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -586,15 +529,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD2_Pin TILT_DIR_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin|TILT_DIR_Pin;
+  /*Configure GPIO pins : LD2_Pin TILT_STEP_Pin TILT_DIR_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PAN_EN_Pin TILT_DIRB10_Pin PAN_DIR_Pin TILT_EN_Pin */
-  GPIO_InitStruct.Pin = PAN_EN_Pin|TILT_DIRB10_Pin|PAN_DIR_Pin|TILT_EN_Pin;
+  /*Configure GPIO pins : PAN_EN_Pin PAN_STEP_Pin PAN_DIR_Pin TILT_EN_Pin */
+  GPIO_InitStruct.Pin = PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -607,13 +550,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(PAN_CAILI_SWITCH_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /*Configure GPIO pin : PB0 (LED2 - external) */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -625,7 +562,7 @@ int __io_putchar(int ch)
   return ch;
 }
 
-/* HAL 콜백 → uart_rpi 모듈로 위임 (실로직은 App/uart_rpi/) */
+/* HAL UART 콜백 → uart_rpi 모듈로 위임 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   uart_rpi_on_rx_cplt(huart);
@@ -634,6 +571,21 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   uart_rpi_on_error(huart);
+}
+
+/**
+  * @brief  타이머 인터럽트 콜백 (신규 추가: 모터 스텝 제어용)
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  // TIM1 (Pan 축 - 400Hz 타겟)
+  if (htim->Instance == TIM1) {
+    step_motor_pan_isr();
+  }
+  // TIM2 (Tilt 축 - 800Hz 타겟)
+  else if (htim->Instance == TIM2) {
+    step_motor_tilt_isr();
+  }
 }
 /* USER CODE END 4 */
 
