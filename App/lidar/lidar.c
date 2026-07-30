@@ -16,6 +16,10 @@ static UART_HandleTypeDef *g_huart = NULL;
 static uint8_t              g_rx_byte = 0U;
 static uint8_t              g_idx = 0U;
 static volatile uint16_t    g_raw_dist_mm = 0U;
+static volatile uint8_t     g_dis_status = 0U;
+static volatile uint16_t    g_intensity = 0U;
+static volatile uint16_t    g_sys_time_ms = 0U;
+static volatile lidar_confidence_t g_confidence = LIDAR_CONF_INVALID;
 
 /* ===== 내부 함수 선언 (UART/인터럽트 제어 전용) ===== */
 static void lidar_reset_rx(void);
@@ -48,6 +52,29 @@ void lidar_init(UART_HandleTypeDef *huart)
 uint16_t lidar_get_distance_mm(void)
 {
     return g_raw_dist_mm;
+}
+
+/**
+ * @brief 최신 센서 상태 값 반환 (0: 정상, 1: 경고 등)
+ */
+uint8_t lidar_get_dis_status(void)   /* ★ 추가 */
+{
+    return g_dis_status;
+}
+
+uint16_t lidar_get_intensity(void)
+{
+    return g_intensity;
+}
+
+uint16_t lidar_get_system_time_ms(void)
+{
+    return g_sys_time_ms;
+}
+
+lidar_confidence_t lidar_get_confidence(void)
+{
+    return g_confidence;
 }
 
 /**
@@ -93,18 +120,22 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
 
                     if ((uint32_t)g_idx >= (uint32_t)LIDAR_PACKET_SIZE)
                     {
-                        uint32_t raw_mm = 0U;
-                        if (lidar_parser_validate(g_buf, &raw_mm) != false)
+                        lidar_parsed_data_t parsed;
+
+                        if (lidar_parser_validate(g_buf, HAL_GetTick(), &parsed) != false)
                         {
                             /* TODO: calib 모듈 재활성화 시 아래로 교체
-                             *   calib_process_distance(raw_mm);
-                             *   g_raw_dist_mm = calib_get_distance_mm();
+                             *   g_raw_dist_mm = calib_process_distance(parsed.raw_mm);
                              * 현재는 오프셋 보정/EMA 필터 없이 raw 값을 그대로 사용 중 */
 #if 0
-                            g_raw_dist_mm = calib_process_distance(raw_mm);
+                            g_raw_dist_mm = calib_process_distance(parsed.raw_mm);
 #else
-                            g_raw_dist_mm = (uint16_t)raw_mm;   /* Raw 거리값 직접 저장 */
+                            g_raw_dist_mm = (uint16_t)parsed.raw_mm;   /* Raw 거리값 직접 저장 */
 #endif
+                            g_dis_status  = parsed.status;
+                            g_intensity    = parsed.intensity;
+                            g_sys_time_ms  = parsed.system_time_ms;
+                            g_confidence   = parsed.confidence;
                         }
                         g_idx = 0U;
                     }

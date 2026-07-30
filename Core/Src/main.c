@@ -71,8 +71,20 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_IWDG_Init(void);
-/* USER CODE BEGIN PFP */
 
+/* USER CODE BEGIN PFP */
+static const char *lidar_confidence_to_str(lidar_confidence_t c)
+{
+  const char *result = "UNKNOWN";
+  switch (c)
+  {
+    case LIDAR_CONF_INVALID: result = "INVALID"; break;
+    case LIDAR_CONF_LOW:     result = "LOW";      break;
+    case LIDAR_CONF_HIGH:    result = "HIGH";     break;
+    default:                                      break;
+  }
+  return result;
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -148,23 +160,27 @@ int main(void)
       HAL_IWDG_Refresh(&hiwdg);          // 부팅 직후 3초간은 RPi 접속 대기를 위해 갱신 허용
     }
     // ➔ 만약 RPi 하트비트가 300ms 이상 끊기면 Refresh가 중단되어 IWDG 타임아웃으로 MCU HW 리셋 발생!
+
     /* [임시 라이다 거리 체크 코드] */
     static uint32_t last_print_tick = 0;
-    if (HAL_GetTick() - last_print_tick >= 10) // 100 -> 0.1초, 1000 -> 1초
+
+    if (HAL_GetTick() - last_print_tick > 10)
     {
-      uint16_t current_dist_mm = lidar_get_distance_mm();
+      uint16_t current_dist_mm  = lidar_get_distance_mm();
+      uint8_t  current_status   = lidar_get_dis_status();
+      uint16_t current_intensity = lidar_get_intensity();
+      uint16_t current_systime   = lidar_get_system_time_ms();
+      lidar_confidence_t current_conf = lidar_get_confidence();
 
-      // 1. 미터(m) 단위 쪼개기 (예: 1234mm -> 1m 와 234mm)
-      uint16_t m_whole = current_dist_mm / 1000;         // m 정수부
-      uint16_t m_fraction = current_dist_mm % 1000;      // m 소수부 (3자리)
+      uint16_t m_whole = current_dist_mm / 1000;
+      uint16_t m_fraction = current_dist_mm % 1000;
+      uint16_t cm_whole = current_dist_mm / 10;
+      uint16_t cm_fraction = current_dist_mm % 10;
 
-      // 2. 센티미터(cm) 단위 쪼개기 (예: 1234mm -> 123cm 와 4mm)
-      uint16_t cm_whole = current_dist_mm / 10;          // cm 정수부
-      uint16_t cm_fraction = current_dist_mm % 10;       // cm 소수부 (1자리)
-
-      // 💡 .%03u 구조는 소수점 자릿수를 무조건 3자리로 채워줍니다 (예: 5mm -> .005 m)
-      printf("[LiDAR] Distance: %u.%03u m (%u.%u cm)\r\n",
-             m_whole, m_fraction, cm_whole, cm_fraction);
+      printf("[LiDAR] %u.%03u m (%u.%u cm) | status=%u intensity=%u sys_t=%ums conf=%s\r\n",
+             m_whole, m_fraction, cm_whole, cm_fraction,
+             current_status, current_intensity, current_systime,
+             lidar_confidence_to_str(current_conf));
 
       last_print_tick = HAL_GetTick();
     }
