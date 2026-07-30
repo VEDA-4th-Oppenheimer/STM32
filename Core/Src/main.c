@@ -15,7 +15,7 @@
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 
 #include "hallEffectSensor.h"   /* 홀센서 (강유근) */
-#include "step_motor.h"         /* 신규 스텝모터 제어 (Pan/Tilt 2축) */
+#include "motor.h"              /* 2축 축 드라이버 (스캔 시퀀스는 App/scan) */
 
 /* USER CODE END Includes */
 
@@ -116,43 +116,18 @@ int main(void)
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
 
 
-  // 신규 스텝 모터 초기화 및 구동 활성화
-  step_motor_init();
+  motor_init();                            // 축 드라이버 (전류 차단 상태로 시작)
 
-  // Pan / Tilt 타이머 인터럽트 시작 (CubeMX에서 해당 타이머 NVIC 활성화 필수)
+  // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
+  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
+  //   TIM1 : 84MHz/84/2500 = 400Hz  (Pan)
+  //   TIM2 : 84MHz/84/1250 = 800Hz  (Tilt, 0.1125도/펄스 -> 90도/s)
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_TIM_Base_Start_IT(&htim2);
 
 
-  // =========================================================
-  // [추가] 라즈베리파이 없이 단독 자동 구동 시퀀스
-  // =========================================================
-  // 전원 인가/초기화 직후 I2C 엔코더가 아직 응답 준비가 안 됐을 수 있어
-  // 짧게 대기 후 homing을 시작한다. (첫 Encoder_Read 실패 시 pan이
-  // 실제로는 이동하지 않고 즉시 "homed"로 오판되는 문제의 근본 원인 중 하나)
-  HAL_Delay(100);
-
-  printf("Auto-Homing Start...\r\n");
-  step_motor_home(); // 1. Homing 명령 인가
-
-  // Homing이 완료(is_homed == 1)될 때까지 대기
-  // (인터럽트로 모터가 제어되므로 여기서 대기해도 모터는 정상 동작합니다)
-  while (motor_ctrl->is_homed == 0) {
-    HAL_IWDG_Refresh(&hiwdg); // 대기 중 워치독 리셋 방지
-  }
-  printf("Auto-Homing Done!\r\n");
-
-  // 2. 가상의 스캔 데이터 설정 (단위: 0.1도 단위, ddeg)
-  struct proto_scan_start auto_scan_cmd;
-  auto_scan_cmd.pan_start_ddeg  = 0; // -45.0도부터 시작
-  auto_scan_cmd.pan_end_ddeg    =  3600; // +45.0도까지
-  auto_scan_cmd.tilt_start_ddeg =  -900;   // 0.0도부터 시작
-  auto_scan_cmd.tilt_end_ddeg   =  900; // 90.0도까지
-  auto_scan_cmd.step_ddeg       =  90; // 10.0도 간격으로 이동
-
-  printf("Auto-Scan Start...\r\n");
-  step_motor_scan_start(&auto_scan_cmd); // 스캔 시작 명령 인가
-  // =========================================================
+  // 홈/스캔 시퀀스는 여기서 걸지 않는다. CMD_HOME / CMD_SCAN_START 를 받아
+  // App/scan 이 메인루프에서 수행한다.
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -583,13 +558,13 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  // TIM1 (Pan 축 - 400Hz 타겟)
+  // TIM1 (Pan 400Hz) / TIM2 (Tilt 800Hz).
+  // 두 핸들러 모두 펄스 1개만 내고 즉시 반환한다 — 분기·printf·I2C·Delay 금지.
   if (htim->Instance == TIM1) {
-    step_motor_pan_isr();
+    motor_pan_isr();
   }
-  // TIM2 (Tilt 축 - 800Hz 타겟)
   else if (htim->Instance == TIM2) {
-    step_motor_tilt_isr();
+    motor_tilt_isr();
   }
 }
 /* USER CODE END 4 */
