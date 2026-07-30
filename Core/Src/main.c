@@ -17,6 +17,7 @@
 #include "hallEffectSensor.h"   /* 홀센서 (강유근) */
 #include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
 #include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
+#include "lidar.h"              /* TOFSense-F2P 수신 (USART6, 송영빈)       */
 
 /* USER CODE END Includes */
 
@@ -119,6 +120,7 @@ int main(void)
 
   motor_init();                            // 축 드라이버 (전류 차단 상태로 시작)
   scan_init();                             // 스캔 시퀀서
+  lidar_init(&huart6);                     // USART6(라이다) 수신 시작
 
   // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
   // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
@@ -137,6 +139,7 @@ int main(void)
   while (1) {
 
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
@@ -548,12 +551,15 @@ int __io_putchar(int ch)
 /* HAL UART 콜백 → uart_rpi 모듈로 위임 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+  // 각 모듈이 자기 인스턴스인지 확인 후 처리한다 (USART1=RPi, USART6=라이다)
   uart_rpi_on_rx_cplt(huart);
+  lidar_on_rx_cplt(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   uart_rpi_on_error(huart);
+  lidar_on_error(huart);
 }
 
 /**

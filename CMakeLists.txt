@@ -52,6 +52,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/uart_rpi/uart_rpi.c
     App/motor/motor.c
     App/scan/scan.c
+    App/lidar/lidar.c
+    App/lidar/lidar_parser.c
     App/hallEffectSensor/hallEffectSensor.c
 )
 
@@ -61,6 +63,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/App/uart_rpi
     ${CMAKE_SOURCE_DIR}/App/motor
     ${CMAKE_SOURCE_DIR}/App/scan
+    ${CMAKE_SOURCE_DIR}/App/lidar
     ${CMAKE_SOURCE_DIR}/App/hallEffectSensor
     ${CMAKE_SOURCE_DIR}/shared
 )
