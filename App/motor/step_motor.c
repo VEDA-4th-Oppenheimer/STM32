@@ -49,11 +49,31 @@ void step_motor_home(void)
 {
     Encoder_t pan_enc;
     float pan_deg = 0.0f;
+    HAL_StatusTypeDef enc_status = HAL_ERROR;
 
     // Pan 축 엔코더 절대각도 판독
-    if (Encoder_Read(&hi2c3, &pan_enc) == HAL_OK) {
+    // 부팅 직후 I2C/센서가 아직 준비되지 않아 첫 판독이 NACK 나는 경우가 있어
+    // 실패 시 짧은 대기 후 재시도한다. (실패를 그냥 넘기면 current_pan_pulse가
+    // 기본값 0에 머물러 target(0)과 우연히 같아지면서 "가짜 homing 완료"가 발생함)
+    for (int retry = 0; retry < HOME_ENCODER_MAX_RETRY; retry++) {
+        enc_status = Encoder_Read(&hi2c3, &pan_enc);
+        if (enc_status == HAL_OK) {
+            break;
+        }
+        HAL_Delay(HOME_ENCODER_RETRY_DELAY_MS);
+    }
+
+    if (enc_status == HAL_OK) {
         pan_deg = pan_enc.degree - PAN_ZERO_OFFSET_DEG;
         motor_ctrl->current_pan_pulse = (int32_t)(pan_deg / DEG_PER_PULSE);
+        printf("[DEBUG] Homing: Pan encoder read OK -> %.2f deg (pulse=%ld)\r\n",
+               pan_deg, motor_ctrl->current_pan_pulse);
+    } else {
+        // 판독 완전 실패: 에러를 알린다. current_pan_pulse는 임의로 건드리지 않고
+        // 이전 값을 그대로 둔다 (0으로 리셋하면 target(0)과 즉시 일치해
+        // homing이 스킵되는 문제가 재발함).
+        printf("[ERROR] Homing: Pan encoder read FAILED after %d retries! "
+               "Pan will NOT physically move to zero.\r\n", HOME_ENCODER_MAX_RETRY);
     }
 
     // Tilt는 임시로 0으로 설정
@@ -97,12 +117,15 @@ static inline void step_pan(void)
     // 1. 드라이버가 꺼져있을까봐 무조건 켜기 (기존 PWM 코드와 동일하게 RESET)
     HAL_GPIO_WritePin(PAN_EN_GPIO_Port, PAN_EN_Pin, GPIO_PIN_RESET);
 
-    // 2. 방향 설정 (만약 반대로 돌면 SET/RESET 위치만 바꿔주세요)
+    // 2. 방향 설정
+    // [주의] 실측 결과 기존 SET/RESET 배치가 실제 회전 방향과 반대였음
+    // (homing 시 소프트웨어는 0으로 수렴했다고 판단했지만 인코더 실측값은
+    //  오히려 반대 방향으로 이동함이 확인되어 극성을 반전함)
     if (motor_ctrl->current_pan_pulse < motor_ctrl->target_pan_pulse) {
-        HAL_GPIO_WritePin(PAN_DIR_GPIO_Port, PAN_DIR_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(PAN_DIR_GPIO_Port, PAN_DIR_Pin, GPIO_PIN_RESET);
         motor_ctrl->current_pan_pulse++;
     } else {
-        HAL_GPIO_WritePin(PAN_DIR_GPIO_Port, PAN_DIR_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(PAN_DIR_GPIO_Port, PAN_DIR_Pin, GPIO_PIN_SET);
         motor_ctrl->current_pan_pulse--;
     }
 

@@ -26,6 +26,11 @@
 #define PAN_ZERO_OFFSET_DEG      0.0f
 #define TILT_ZERO_OFFSET_DEG     90.0f
 
+/* Homing 시 Pan 엔코더 초기 판독 재시도 설정
+ * (부팅 직후 I2C/센서가 아직 안정화되지 않아 첫 판독이 실패하는 경우 대비) */
+#define HOME_ENCODER_MAX_RETRY      5
+#define HOME_ENCODER_RETRY_DELAY_MS 10
+
 /* 0.1도(ddeg) <-> 펄스 변환 매크로 */
 #define DDEG_TO_PULSE(ddeg)      (((ddeg) * 8) / 9)
 #define PULSE_TO_DDEG(pulse)     (((pulse) * 9) / 8)
