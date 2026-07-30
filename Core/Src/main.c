@@ -70,13 +70,26 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void);
+static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_I2C3_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-
+static const char *lidar_confidence_to_str(lidar_confidence_t c)
+{
+  const char *result = "UNKNOWN";
+  switch (c)
+  {
+    case LIDAR_CONF_INVALID: result = "INVALID"; break;
+    case LIDAR_CONF_LOW:     result = "LOW";      break;
+    case LIDAR_CONF_HIGH:    result = "HIGH";     break;
+    default:                                      break;
+  }
+  return result;
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -116,6 +129,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
+  MX_I2C2_Init();
+  MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART6_UART_Init();
   MX_IWDG_Init();
@@ -184,6 +199,7 @@ int main(void)
      *   printf 한 묶음이 ~10ms 블로킹인데, 되감기 완료 판정 순간에 걸리면
      *   그동안 9~18 스텝(1~2도)이 더 나가 축이 과도하게 되감긴다.
      *   실측: 연속 2회 스캔 상호상관에서 -2도/회 드리프트로 나타났다. */
+
     if ((scan_is_busy() == 0u) && ((HAL_GetTick() - last_print_tick) >= 1000u))
     {
       uint16_t d = lidar_get_distance_mm();
@@ -217,6 +233,24 @@ int main(void)
         printf("[SCAN ] !! 점 유실 %lu개 (상행 %lu개) — 메인루프 지연\r\n",
                (unsigned long)dropped, (unsigned long)sent);
       }
+
+    if (HAL_GetTick() - last_print_tick > 10)
+    {
+      uint16_t current_dist_mm  = lidar_get_distance_mm();
+      uint8_t  current_status   = lidar_get_dis_status();
+      uint16_t current_intensity = lidar_get_intensity();
+      uint16_t current_systime   = lidar_get_system_time_ms();
+      lidar_confidence_t current_conf = lidar_get_confidence();
+
+      uint16_t m_whole = current_dist_mm / 1000;
+      uint16_t m_fraction = current_dist_mm % 1000;
+      uint16_t cm_whole = current_dist_mm / 10;
+      uint16_t cm_fraction = current_dist_mm % 10;
+
+      printf("[LiDAR] %u.%03u m (%u.%u cm) | status=%u intensity=%u sys_t=%ums conf=%s\r\n",
+             m_whole, m_fraction, cm_whole, cm_fraction,
+             current_status, current_intensity, current_systime,
+             lidar_confidence_to_str(current_conf));
 
       last_print_tick = HAL_GetTick();
     }
