@@ -15,7 +15,8 @@
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 
 #include "hallEffectSensor.h"   /* 홀센서 (강유근) */
-#include "motor.h"              /* 2축 축 드라이버 (스캔 시퀀스는 App/scan) */
+#include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
+#include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
 
 /* USER CODE END Includes */
 
@@ -117,6 +118,7 @@ int main(void)
 
 
   motor_init();                            // 축 드라이버 (전류 차단 상태로 시작)
+  scan_init();                             // 스캔 시퀀서
 
   // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
   // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
@@ -135,6 +137,7 @@ int main(void)
   while (1) {
 
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
 

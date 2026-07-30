@@ -12,7 +12,8 @@
  *    - 21.15 : (de)serialize memcpy 는 문서화된 deviation
  * ==========================================================================*/
 #include "uart_rpi.h"
-#include "motor.h"        /* CMD_DISARM → motor_disarm (스캔 시퀀스는 motor/app_main 소관) */
+#include "motor.h"        /* CMD_DISARM → motor_disarm            */
+#include "scan.h"         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
@@ -69,13 +70,25 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
     }
 }
 
-/* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가 */
-/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — app_main 스캔 시퀀스에서 호출 예정 */
-void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg, uint16_t d_mm)
+/* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가.
+ *
+ * v5 에서 라이다 원시 품질 필드가 붙었다(6B -> 18B). 정규화하거나 유효성을
+ * 판정하지 않고 **F2P 가 준 값을 그대로** 올린다 — 판정 기준이 나중에 바뀌어도
+ * 이미 찍은 스캔을 다시 해석할 수 있어야 하기 때문. 유효성 판정은 데몬 몫. */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — App/scan 이 호출 */
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
+                              uint16_t d_mm, uint16_t signal_strength,
+                              uint32_t device_time_ms,
+                              uint8_t dis_status, uint8_t range_precision)
 {
-    struct proto_scan_point pt = { .pan_ddeg  = pan_ddeg,
-                                   .tilt_ddeg = tilt_ddeg,
-                                   .d_mm      = d_mm };
+    struct proto_scan_point pt = { .pan_ddeg        = pan_ddeg,
+                                   .tilt_ddeg       = tilt_ddeg,
+                                   .d_mm            = d_mm,
+                                   .signal_strength = signal_strength,
+                                   .device_time_ms  = device_time_ms,
+                                   .stm_ts_ms       = HAL_GetTick(),
+                                   .dis_status      = dis_status,
+                                   .range_precision = range_precision };
     uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
     s_scan_count++;
 }
@@ -105,8 +118,11 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
         switch (cmd) {
 
         case CMD_HOME:
-            DBG("  HOME (모터부 담당) -> HOMED 회신\r\n");
-            uart_rpi_send_frame(CMD_HOMED, NULL, 0u);   /* 상행 경로 검증용 */
+            DBG("  HOME -> scan 시퀀서에 위임\r\n");
+            /* 여기서 엔코더를 직접 읽지 않는다 — 블로킹 I2C 라 디스패처
+             * 안에서 수십 ms 를 잡아먹고 그 사이 프레임이 밀린다.
+             * scan_process() 가 메인루프에서 수행하고 CMD_HOMED 를 보낸다. */
+            scan_home();
             break;
 
         case CMD_SCAN_START:
@@ -118,20 +134,22 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
                 DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
                     ss.pan_start_ddeg, ss.pan_end_ddeg,
                     ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
-                /* TODO(강유근/송영빈): motor/app_main 에 스캔 시퀀스 시작 요청
-                 *   (ss 범위·격자로 팬·틸트 스윕 개시). uart_rpi 는 프레임만 담당.
-                 *   각 점은 uart_rpi_send_scan_point(), 완료 시 uart_rpi_send_scan_done(). */
+                /* 시퀀스는 scan 이 메인루프에서 수행한다. uart_rpi 는 프레임만.
+                 * 각 점은 scan 이 uart_rpi_send_scan_point() 로, 완료 시
+                 * uart_rpi_send_scan_done() 으로 올린다. */
+                scan_start(&ss);
             }
             break;
 
         case CMD_SCAN_STOP:
             DBG("  SCAN_STOP\r\n");
-            /* TODO(강유근/송영빈): 스캔 시퀀스 중단 요청 (motor 정지) */
+            scan_stop();
             break;
 
         case CMD_DISARM:
             DBG("  DISARM (스텝 2축 disable)\r\n");
-            motor_disarm();                             /* → 모터 정지 */
+            scan_stop();                                /* 시퀀스 중단 먼저 */
+            motor_disarm();                             /* → 전류 차단     */
             break;
 
         case CMD_PING:

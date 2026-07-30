@@ -30,10 +30,16 @@ void uart_rpi_process(void);
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
 
 
-/* 스캔 점 1개 상행 (CMD_SCAN_DATA):
- *   pan(방위 0.1°), tilt(고각 0.1°, 부호), d(거리 mm).
+/* 스캔 점 1개 상행 (CMD_SCAN_DATA, protocol v5):
+ *   pan/tilt = 기구각(0.1°, 틸트는 부호), d_mm = 거리.
+ *   나머지는 TOFSense-F2P 프레임 원본 그대로 — 정규화도 유효성 판정도 하지
+ *   않는다(판정 기준이 바뀌어도 재해석할 수 있어야 하므로). stm_ts_ms 는
+ *   내부에서 HAL_GetTick() 으로 채운다.
  *   내부 point 카운터(s_scan_count)를 1 증가시킨다. */
-void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg, uint16_t d_mm);
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
+                              uint16_t d_mm, uint16_t signal_strength,
+                              uint32_t device_time_ms,
+                              uint8_t dis_status, uint8_t range_precision);
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE):
  *   이번 스캔에서 상행한 총 point 수(내부 카운터)를 담아 전송.
