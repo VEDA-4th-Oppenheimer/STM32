@@ -71,13 +71,23 @@ static int32_t scan_tilt_target_pulse(void)
  * 메인루프 전용 — 블로킹 I2C 를 탄다. */
 static int32_t scan_encoder_error_ddeg(motor_axis_t ax, bool *ok)
 {
-    int32_t enc_pulse = 0;
     int32_t err = 0;
+
+#if SCAN_NO_ENCODER
+    /* 브링업 모드: 판독을 아예 시도하지 않는다.
+     * 단순히 실패시키는 것과 다르다 — 실패하면 motor_read_encoder_pulse 가
+     * 5회 × (I2C 타임아웃 10ms + 대기 10ms) = 약 100ms 를 잡아먹고, 그게
+     * 줄마다 두 축이면 스캔 전체에 36초가 헛돈다. 호출 자체를 건너뛴다. */
+    (void)ax;
+    *ok = false;               /* 호출자가 대조·재영점을 건너뛴다 */
+#else
+    int32_t enc_pulse = 0;
 
     *ok = (motor_read_encoder_pulse(ax, &enc_pulse) == HAL_OK);
     if (*ok) {
         err = motor_pulse_to_ddeg(enc_pulse - motor_get_pulse(ax));
     }
+#endif
     return err;
 }
 
@@ -175,6 +185,27 @@ scan_state_t scan_get_state(void)
  * ------------------------------------------------------------------------- */
 static void scan_do_homing(void)
 {
+#if SCAN_NO_ENCODER
+    /* 브링업 모드: 판독 없이 "지금 있는 자리 = 기구각 0" 으로 선언한다.
+     * 즉 사용자가 틸트를 바닥(nadir), 팬을 기준 방위에 물리적으로 맞춰 둔
+     * 상태여야 한다. 맞추지 않으면 산출물이 그 오차만큼 통째로 돌아간다.
+     *
+     * 엔코더 raw 는 0xFFFF 로 보낸다 — 14비트가 낼 수 없는 값이라 산출물만
+     * 보고도 "엔코더 없이 찍은 스캔" 임을 구분할 수 있다. 0 을 보내면 정상
+     * 판독값과 섞여 나중에 이 데이터를 신뢰해버릴 위험이 있다. */
+    struct proto_homed h;
+
+    motor_sync_pulse(MOTOR_AXIS_PAN,  0);
+    motor_sync_pulse(MOTOR_AXIS_TILT, 0);
+    s.homed = true;
+
+    /* 0xFFFF = 14비트 엔코더(최대 16383)가 낼 수 없는 값 → "미사용" 표식 */
+    h.pan_encoder_raw  = 0xFFFFu;
+    h.tilt_encoder_raw = 0xFFFFu;
+    h.pan_ddeg  = 0;
+    h.tilt_ddeg = 0;
+    uart_rpi_send_frame((uint8_t)CMD_HOMED, &h, (uint8_t)sizeof(h));
+#else
     Encoder_t pan_enc;
     Encoder_t tilt_enc;
     bool      ok;
@@ -214,6 +245,7 @@ static void scan_do_homing(void)
         s.homed = false;
         scan_report_err((uint8_t)ERR_NOT_HOMED);
     }
+#endif /* SCAN_NO_ENCODER */
     s.state = SC_IDLE;
 }
 
