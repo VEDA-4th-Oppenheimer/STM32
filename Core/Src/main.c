@@ -124,8 +124,10 @@ int main(void)
 
   // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
   // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
-  //   TIM1 : 84MHz/84/2500 = 400Hz  (Pan)
-  //   TIM2 : 84MHz/84/1250 = 800Hz  (Tilt, 0.1125도/펄스 -> 90도/s)
+  //   TIM1 : 84MHz/84/5000 = 200Hz  (Pan)
+  //   TIM2 : 84MHz/84/2500 = 400Hz  (Tilt, 0.1125도/펄스 -> 45도/s)
+  // 틐트 45도/s + 라이다 100Hz = 0.45도/샘플 = 정확히 4 마이크로스텝.
+  // 격자 0.9도(=8 마이크로스텝)에 샘플이 정확히 2개씩 떨어진다.
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -316,7 +318,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 84-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 2500-1;
+  htim1.Init.Period = 5000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -362,7 +364,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 84-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 1250-1;
+  htim2.Init.Period = 2500-1;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
