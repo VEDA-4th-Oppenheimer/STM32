@@ -14,7 +14,8 @@
 #include <stdio.h>
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 
-#include "hallEffectSensor.h"   /* 홀센서 (강유근) */
+#include "hallEffectSensor.h"   /* MT6701 자기 엔코더 (강유근) */
+#include "encoder_bench.h"      /* 엔코더 벤치 판독 (브링업 전용, 기본 껼짐) */
 #include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
 #include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
 #include "lidar.h"              /* TOFSense-F2P 수신 (USART6, 송영빈)       */
@@ -143,6 +144,7 @@ int main(void)
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
     lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
+    encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
 

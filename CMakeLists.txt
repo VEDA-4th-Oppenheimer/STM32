@@ -55,6 +55,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/lidar/lidar.c
     App/lidar/lidar_parser.c
     App/hallEffectSensor/hallEffectSensor.c
+    App/hallEffectSensor/encoder_bench.c
 )
 
 # Add include paths
