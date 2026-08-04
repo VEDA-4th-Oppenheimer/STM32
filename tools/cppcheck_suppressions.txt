@@ -30,7 +30,29 @@ misra-c2012-2.4:*shared/protocol.h
 misra-c2012-2.5:*shared/protocol.h
 misra-c2012-20.1:*shared/protocol.h
 
-# --- 5. motor 테스트 스텁 제외 (이현우 임시 테스트용) ---
-#   강유근 폐루프 모듈(motor.c/h)로 대체 예정. 실제 모듈 편입 시 재검토
+# --- 5. (해제됨) App/motor 억제 ---
+#   2026-07-30: motor.c 가 이현우 테스트 스텁에서 실제 축 드라이버로 대체되어
+#   억제를 풀었다. 이제 MISRA 게이트가 motor.c 를 실제로 검사한다.
+#   HAL 페리페럴 접근(11.4) 등이 새로 뜨면 개별 deviation 으로 처리할 것 —
+#   폴더 통째 억제로 되돌리지 말 것.
 #   (GPIO/TIM 페리페럴 접근은 11.4/13.4 deviation 필요 예상 → 그때 정책 결정).
-*:*App/motor/*
+
+# --- 6. App/ 계층 MISRA Advisory deviation (2026-07-30, 이현우) ---
+#   게이트 정책 A = Required/Mandatory 만 차단, Advisory 는 리포트만.
+#   cppcheck misra 애드온에 등급 필터가 없어, 실제로 뜨는 Advisory 룰을
+#   근거를 달아 개별 등록한다. 폴더 통째 억제(`*:*App/motor/*`)로 돌아가지 말 것.
+#
+#   11.4 (포인터 <-> 정수 변환, Advisory)
+#     원인: ST HAL 의 페리페럴 베이스가 `#define GPIOB ((GPIO_TypeDef*)GPIOB_BASE)`
+#           형태라, GPIO/TIM/I2C 를 쓰는 모든 코드에서 구조적으로 발생한다.
+#     판단: 벤더 헤더를 고치지 않는 한 회피 불가. 페리페럴 접근 자체가 목적인
+#           계층이므로 deviation 으로 수용한다. (MISRA Compliance:2020 의
+#           adopted code / 하드웨어 접근 예외에 해당)
+misra-c2012-11.4:*App/*
+#
+#   8.7 (단일 TU 에서만 참조되는 외부 링키지, Advisory)
+#     원인: 모듈의 공개 API 를 cppcheck 가 "한 파일에서만 쓴다" 고 본다.
+#           호출자가 아직 없는 계층(App/scan 미착수)일수록 전부 걸린다.
+#     판단: 모듈 경계를 헤더로 노출하는 것이 이 프로젝트의 구조라 오탐이다.
+#           static 으로 바꾸면 계층 분리가 깨진다.
+misra-c2012-8.7:*App/*

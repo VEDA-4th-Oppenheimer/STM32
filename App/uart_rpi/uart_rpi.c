@@ -12,8 +12,8 @@
  *    - 21.15 : (de)serialize memcpy 는 문서화된 deviation
  * ==========================================================================*/
 #include "uart_rpi.h"
-#include "motor.h"        /* CMD_DISARM → motor_disarm */
-#include "scan.h"         /* CMD_SCAN_START/STOP → 스캔 시퀀스 (App/scan) */
+#include "motor.h"        /* CMD_DISARM → motor_disarm            */
+#include "scan.h"         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
@@ -22,10 +22,6 @@
  *  하드웨어 브링업 때 트레이스가 필요하면 이 파일 상단(또는 빌드 플래그)에서
  *  UART_RPI_DEBUG 를 1 로 지정한다(그 경우 21.6 은 디버그 빌드 한정 deviation).
  * ------------------------------------------------------------------------- */
-/* ⚠️ 스캔 중에는 반드시 0.
- *   1 이면 수신 바이트마다 [feed] 를, 송신마다 [TX] 를 printf 하는데
- *   115200 기준 한 줄이 ~2ms 블로킹이라 메인루프가 마비되고
- *   scan_tick 이 굶어 스캔 점이 뭉텅이로 유실된다(실측 확인). */
 #ifndef UART_RPI_DEBUG
 #define UART_RPI_DEBUG 0
 #endif
@@ -45,20 +41,7 @@ static volatile uint8_t    s_rx;           /* 1바이트 수신 버퍼 (IT)     
 static volatile uint8_t    s_rb[256];      /* 수신 링버퍼                  */
 static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
-static volatile uint32_t s_last_hb_tick = 0;
-
 static uint32_t s_scan_count = 0; /* SCAN 시작할 때 point count 초기화 */
-
-/* ⚠️ 브링업 진단 카운터 (RPi 링크 문제 해결 후 제거 가능).
- *   rx=0                 → USART1 에 바이트가 안 옴 (배선/RPi 미송신)
- *   rx>0, frames=0, crc=0 → 프레임 경계를 못 잡음 (SOF 불일치/노이즈)
- *   crc_err>0            → 바이트는 오는데 깨짐 (baud/GND/노이즈)
- *   frames>0, tx=0       → 수신·파싱은 되는데 응답을 안 함 (디스패치 로직)
- *   frames>0, tx>0       → STM 은 정상. RPi 수신측 문제(TX 배선/드라이버) */
-static volatile uint32_t s_diag_rx     = 0u;
-static volatile uint32_t s_diag_frame  = 0u;   /* CRC 통과 프레임 */
-static volatile uint32_t s_diag_crcerr = 0u;
-static volatile uint32_t s_diag_tx     = 0u;   /* 상행 송신 프레임 */
 /* protocol.h 프레임 빌드 → USART1 TX 전송 (상행) */
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
 {
@@ -83,19 +66,31 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
         total = (uint8_t)(total + PROTO_CRC_LEN);
 
         (void)HAL_UART_Transmit(s_huart, frame, total, 100u);
-        s_diag_tx++;                                     /* 진단: 상행 프레임 */
         DBG("[TX] cmd=0x%02X len=%u\r\n", cmd, payload_len);
     }
 }
 
-/* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가 */
-/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — app_main 스캔 시퀀스에서 호출 예정 */
-void uart_rpi_send_scan_point(const struct proto_scan_point *pt)
+/* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가.
+ *
+ * v5 에서 라이다 원시 품질 필드가 붙었다(6B -> 18B). 정규화하거나 유효성을
+ * 판정하지 않고 **F2P 가 준 값을 그대로** 올린다 — 판정 기준이 나중에 바뀌어도
+ * 이미 찍은 스캔을 다시 해석할 수 있어야 하기 때문. 유효성 판정은 데몬 몫. */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — App/scan 이 호출 */
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
+                              uint16_t d_mm, uint16_t signal_strength,
+                              uint32_t device_time_ms,
+                              uint8_t dis_status, uint8_t range_precision)
 {
-    if (pt != NULL) {
-        uart_rpi_send_frame(CMD_SCAN_DATA, pt, (uint8_t)sizeof(*pt));
-        s_scan_count++;
-    }
+    struct proto_scan_point pt = { .pan_ddeg        = pan_ddeg,
+                                   .tilt_ddeg       = tilt_ddeg,
+                                   .d_mm            = d_mm,
+                                   .signal_strength = signal_strength,
+                                   .device_time_ms  = device_time_ms,
+                                   .stm_ts_ms       = HAL_GetTick(),
+                                   .dis_status      = dis_status,
+                                   .range_precision = range_precision };
+    uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
+    s_scan_count++;
 }
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE): 상행한 총 point 수 전송 */
@@ -118,14 +113,16 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
 
     if (rx_crc == calc) {
         uint8_t cmd = buf[1];
-        s_diag_frame++;                                  /* 진단: 유효 프레임 */
         DBG("  CRC OK, cmd=0x%02X\r\n", cmd);
 
         switch (cmd) {
 
         case CMD_HOME:
-            DBG("  HOME (모터부 담당) -> HOMED 회신\r\n");
-            uart_rpi_send_frame(CMD_HOMED, NULL, 0u);   /* 상행 경로 검증용 */
+            DBG("  HOME -> scan 시퀀서에 위임\r\n");
+            /* 여기서 엔코더를 직접 읽지 않는다 — 블로킹 I2C 라 디스패처
+             * 안에서 수십 ms 를 잡아먹고 그 사이 프레임이 밀린다.
+             * scan_process() 가 메인루프에서 수행하고 CMD_HOMED 를 보낸다. */
+            scan_home();
             break;
 
         case CMD_SCAN_START:
@@ -137,26 +134,25 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
                 DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
                     ss.pan_start_ddeg, ss.pan_end_ddeg,
                     ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
-                scan_start(&ss);        /* 스캔 시퀀스 개시 (App/scan) */
+                /* 시퀀스는 scan 이 메인루프에서 수행한다. uart_rpi 는 프레임만.
+                 * 각 점은 scan 이 uart_rpi_send_scan_point() 로, 완료 시
+                 * uart_rpi_send_scan_done() 으로 올린다. */
+                scan_start(&ss);
             }
             break;
 
         case CMD_SCAN_STOP:
             DBG("  SCAN_STOP\r\n");
-            scan_stop();                /* 모터 정지 + 시퀀스 종료 */
+            scan_stop();
             break;
 
         case CMD_DISARM:
             DBG("  DISARM (스텝 2축 disable)\r\n");
-            scan_stop();                                /* 스캔 중이면 먼저 중단 */
-            motor_disarm();                             /* → 모터 정지 */
+            scan_stop();                                /* 시퀀스 중단 먼저 */
+            motor_disarm();                             /* → 전류 차단     */
             break;
 
         case CMD_PING:
-            /* ★ heartbeat 갱신은 PING 에서 해야 한다.
-             *   (이전에는 DISARM 에서만 갱신돼 last_hb 가 0 에 머물렀고,
-             *    main.c 의 IWDG feed 조건이 3초 후 끊겨 MCU 가 리셋됐다.) */
-            s_last_hb_tick = HAL_GetTick();
             uart_rpi_send_frame(CMD_PONG, NULL, 0u);    /* heartbeat 응답 */
             DBG("  PING -> PONG\r\n");
             break;
@@ -168,14 +164,8 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
             break;
         }
     } else {
-        s_diag_crcerr++;                                 /* 진단: CRC 불일치 */
         DBG("CRC FAIL rx=%04X calc=%04X\r\n", rx_crc, calc);
     }
-}
-/* 외부(main.c)에서 마지막 하트비트 수신 후 경과 시간을 확인할 수 있는 함수 추가 */
-uint32_t uart_rpi_get_last_hb_tick(void)
-{
-    return s_last_hb_tick;
 }
 
 /* 바이트 스트림 → 프레임 파싱 (상태머신), 완성 시 proto_dispatch 호출 */
@@ -234,20 +224,10 @@ void uart_rpi_init(UART_HandleTypeDef *huart)
 void uart_rpi_on_rx_cplt(UART_HandleTypeDef *huart)
 {
     if (huart == s_huart) {
-        s_diag_rx++;                                     /* 진단: 수신 바이트 */
         s_rb[s_rb_head] = s_rx;                          /* 링버퍼 적재만 */
         s_rb_head = (uint16_t)((s_rb_head + 1u) & 0xFFu);/* 256 wrap */
         (void)HAL_UART_Receive_IT(huart, (uint8_t *)&s_rx, 1u);
     }
-}
-
-void uart_rpi_get_diag(uint32_t *rx, uint32_t *frames, uint32_t *crc_err,
-                       uint32_t *tx_frames)
-{
-    if (rx        != NULL) { *rx        = s_diag_rx;     }
-    if (frames    != NULL) { *frames    = s_diag_frame;  }
-    if (crc_err   != NULL) { *crc_err   = s_diag_crcerr; }
-    if (tx_frames != NULL) { *tx_frames = s_diag_tx;     }
 }
 
 void uart_rpi_on_error(UART_HandleTypeDef *huart)

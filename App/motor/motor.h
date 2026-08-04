@@ -1,127 +1,134 @@
 /* ============================================================================
- *  motor.h  --  스텝모터 2축 제어 (DRV8825/ELB050411)
+ *  motor.h  --  Pan/Tilt 2축 스텝모터 축 드라이버 (DRV8825 / 17HS4401)
  * ----------------------------------------------------------------------------
- *  담당: 강유근  (⚠️ 현재는 이현우가 만든 "경로 테스트용 최소 스텁"
- *                 — 정밀 위치제어/폐루프/MT6701 엔코더는 강유근이 이어받아 구현)
+ *  담당: 강유근 (원 구현) / 이현우 (계층 분리 리팩터링)
  *
- *  STEP = TIM PWM (PB14=TIM1_CH2N 방위, PA6=TIM3_CH1 고각)
- *  DIR/EN = GPIO (PAN_DIR/PAN_EN, TILT_DIR/TILT_EN)  ※ EN active-low
+ *  ★ 이 계층은 "축을 시키는 대로 움직이는 것"만 한다.
+ *    스캔 시퀀스(줄 진행 / serpentine 반전 / 완료 판정 / 홈 절차)는
+ *    App/scan 소관이다. 여기에 스캔 상태를 넣지 말 것.
  *
- *  ⚠️ 팬은 TIM1(어드밴스드 타이머)의 **상보 출력 CH2N** 이다.
- *    정규 채널 CH1~CH3 핀(PA8/PA9/PA10)이 I2C3·USART1(RPi 링크)에 막혀
- *    N 출력을 쓸 수밖에 없었다(강유근 핀 배정).
- *    → 반드시 HAL_TIMEx_PWMN_Start/Stop 을 쓸 것.
- *      HAL_TIM_PWM_Start 는 CH2(PA9)를 켜므로 PB14 에선 아무것도 안 나온다.
+ *    왜 나눴나: 이전 구현은 스캔 시퀀서가 타이머 ISR 안에 있었다. 그래서
+ *    시퀀서가 필요로 하는 일(HAL_Delay / printf / 블로킹 I2C)을 ISR 안에서
+ *    하게 됐고, ISR 안 HAL_Delay 는 SysTick 을 기다리다 데드락이 나며
+ *    블로킹 I/O 는 라이다 UART 수신을 밀어낸다. 계층을 나누면 이 부류의
+ *    버그가 구조적으로 발생할 수 없다.
+ *
+ *  구동 방식:
+ *    STEP/DIR/EN 전부 GPIO. 타이머(TIM1=Pan, TIM2=Tilt)는 Base 인터럽트만
+ *    쓰고, 인터럽트 1회당 최대 1펄스를 낸다. 즉 타이머 주파수 = 최대 pps.
+ *    ※ EN 은 active-low.
+ *
+ *  하드웨어:
+ *    Pan  STEP=PB14  DIR=PB15  EN=PB1   엔코더 I2C3 (PA8/PC9)
+ *    Tilt STEP=PA6   DIR=PA7   EN=PB6   엔코더 I2C1 (PB8/PB9)
  * ==========================================================================*/
 #ifndef MOTOR_H
 #define MOTOR_H
 
-#include "main.h"          /* HAL 타입 + 핀 라벨(PAN_DIR_Pin 등) */
+#include "main.h"
+#include "hallEffectSensor.h"
+#include <stdbool.h>
+#include <stdint.h>
 
-/* STEP PWM 타이머 핸들 저장 + 부팅 시 안전(비활성) 상태로. */
-void motor_init(TIM_HandleTypeDef *pan_step, TIM_HandleTypeDef *tilt_step);
+/* --- 축 식별 --------------------------------------------------------------*/
+typedef enum {
+    MOTOR_AXIS_PAN = 0,
+    MOTOR_AXIS_TILT,
+    MOTOR_AXIS_COUNT
+} motor_axis_t;
 
-/* [테스트] 목표각 수신 → 부호로 방향만 정해 회전 시작.
- * ※ 정밀 위치제어(각도만큼 정확히 이동)는 강유근 폐루프+엔코더 몫. */
-void motor_set_target(int16_t theta_ddeg, int16_t phi_ddeg);
+/* --- 기구 상수 ------------------------------------------------------------*/
+#define MOTOR_STEP_DEGREE     1.8f    /* 모터 기본 스텝각                    */
+#define MOTOR_MICROSTEP       16      /* DRV8825 물리 스위치 설정 (1/16)     */
 
-/* 안전정지: 양축 PWM 정지 + EN 비활성(active-low → HIGH). */
-void motor_disarm(void);
+/* 1펄스당 각도 = 1.8 / 16 = 0.1125도 = 1.125 ddeg */
+#define MOTOR_DEG_PER_PULSE   (MOTOR_STEP_DEGREE / (float)MOTOR_MICROSTEP)
 
-/* ---------------------------------------------------------------------------
- *  스캔용 API (App/scan 이 호출)
+/* STEP 펄스 폭. DRV8825 최소 요구는 HIGH/LOW 각 1.9us (데이터시트).
+ * 84MHz 에서 volatile 루프 1회 ≈ 7사이클 이므로 50회 ≈ 4us — 2배 여유.
+ * ⚠️ 이전 값은 5000(≈0.42ms)이었다. 틸트 ISR 주기가 1.25ms 인데 그 안에서
+ *   0.42ms 를 스핀하면 CPU 의 3분의 1을 ISR 에서 태우고, 그동안 라이다
+ *   UART(USART6) 수신 인터럽트가 밀려 프레임을 잃는다.
+ * ⚠️ 실기 확인 필요 — 드라이버가 4us 펄스를 확실히 먹는지는 실측 후 확정. */
+#define MOTOR_STEP_PULSE_SPIN 50u
+
+/* DIR 셋업 시간. DRV8825 는 STEP 상승 전 650ns 를 요구한다(84MHz=55사이클).
+ * GPIO 쓰기 두 번만으로는 아슬아슬해 명시적으로 벌린다. */
+#define MOTOR_DIR_SETUP_SPIN  10u
+
+/* --- 엔코더 영점 상수 -----------------------------------------------------
+ *  리밋스위치를 쓰지 않으므로 양축 모두 이 상수에 의존한다.
+ *  조립 후 1회 실측해 채워야 한다:
+ *    ① 축을 기준 자세로 맞춘다 (팬=기준 방위 / 틸트=바닥 nadir)
+ *    ② CMD_HOME 을 걸고 CMD_HOMED 가 올려주는 엔코더 raw 를 읽는다
+ *       (RPi 에서 `turret_test state` 가 raw 와 도 환산을 같이 찍는다)
+ *    ③ 그 값을 아래에 넣는다
+ *  상수가 틀려도 CMD_HOMED 가 raw 를 함께 올리므로 이미 찍은 스캔의 각도를
+ *  오프라인에서 재계산할 수 있다(재스캔 불필요). */
+#define MOTOR_PAN_ZERO_OFFSET_DEG    0.0f
+#define MOTOR_TILT_ZERO_OFFSET_DEG   90.0f
+
+/* 부팅 직후 I2C/센서가 아직 안정화되지 않아 첫 판독이 NACK 나는 경우 대비 */
+#define MOTOR_ENC_MAX_RETRY          5u
+#define MOTOR_ENC_RETRY_DELAY_MS     10u
+
+/* --- ddeg <-> pulse 변환 --------------------------------------------------
+ *  1 pulse = 1.125 ddeg 이므로  pulse = ddeg * 8/9,  ddeg = pulse * 9/8.
  *
- *  ⚠️ 현재는 1축 임시 스캔용 최소 구현. 각도는 TIM1 업데이트 인터럽트로 센
- *    실제 STEP 펄스 수에서 산출한다(NVIC: TIM1_UP_TIM10_IRQn, 우선순위 1).
+ *  ⚠️ 정수 연산이라 나머지가 버려진다. **절대각 변환에만 쓰고 증분에 쓰지 말 것.**
+ *    예) 1도(=10 ddeg) 스텝을 미리 펄스로 굳히면 9펄스(1.0125도)로 고정돼
+ *      180줄 누적 시 방위 커버리지가 어긋난다. 목표는 매번
+ *        target = motor_ddeg_to_pulse(start_ddeg + line * step_ddeg)
+ *      처럼 절대각에서 계산해야 절삭이 누적되지 않는다.
  *
- *  강유근 확장 시:
- *    - motor_pan_sweep_start() 에 가감속 램프 + 스텝카운트 추가
- *    - motor_tilt_step() 을 MT6701 엔코더 폐루프로 실구현
- *    - (선택) motor_get_pan_ddeg()/motor_get_tilt_ddeg() 를 노출하면
- *      scan.c 의 시간 기반 산출을 그것으로 교체 가능
- * ------------------------------------------------------------------------- */
+ *  틸트는 부호가 있으므로 0 방향 절삭이 아니라 부호를 보존해 반올림한다. */
+static inline int32_t motor_ddeg_to_pulse(int32_t ddeg)
+{
+    return (ddeg >= 0) ? (((ddeg * 8) + 4) / 9)
+                       : -((((-ddeg) * 8) + 4) / 9);
+}
 
-/* 스윕 방향 */
-#define MOTOR_DIR_CW    1
-#define MOTOR_DIR_CCW   (-1)
+static inline int32_t motor_pulse_to_ddeg(int32_t pulse)
+{
+    return (pulse >= 0) ? (((pulse * 9) + 4) / 8)
+                        : -((((-pulse) * 9) + 4) / 8);
+}
 
-/* 팬 축 연속 스윕 시작 (등속).
- * STEP 펄스마다 TIM 업데이트 인터럽트로 스텝을 센다(방향 부호 반영).
- * dir = MOTOR_DIR_CW / MOTOR_DIR_CCW */
-void motor_pan_sweep_start_dir(int8_t dir);
+/* --- 수명주기 -------------------------------------------------------------*/
+void motor_init(void);          /* GPIO 초기 상태. 드라이버는 비활성으로 시작 */
+void motor_enable(void);        /* 양축 드라이버 전류 인가                   */
+void motor_disarm(void);        /* 즉시 정지 + 전류 차단 (CMD_DISARM)        */
 
-/* CW 스윕 시작 (기존 호출부 호환). */
-void motor_pan_sweep_start(void);
+/* --- 위치 제어 (메인루프에서 호출) ----------------------------------------*/
+void    motor_set_target(motor_axis_t ax, int32_t pulse);
+int32_t motor_get_target(motor_axis_t ax);
+bool    motor_is_idle(motor_axis_t ax);   /* 현재 == 목표 */
 
-/* 홈(리셋 지점) 기준 누적 스텝. 되감기 완료 판정에 쓴다.
- * CCW 회전 시 감소하므로 부호가 있다. */
-int32_t motor_get_pan_steps(void);
+/* 현재 위치를 강제로 덮어쓴다 (홈 확립 / 탈조 재영점).
+ * 목표도 함께 옮기므로 호출 직후 축은 정지 상태가 된다 — 위치만 바꾸고
+ * 목표를 두면 다음 ISR 이 옛 목표를 향해 달려나간다. */
+void motor_sync_pulse(motor_axis_t ax, int32_t pulse);
 
-/* 팬 축 정지 (EN 은 유지 — 위치 보존. 완전 차단은 motor_disarm). */
-void motor_pan_stop(void);
+/* --- 관측 (ISR/메인루프 어디서든 안전) ------------------------------------
+ *  32비트 정렬 워드 읽기라 Cortex-M4 에서 원자적이다. 라이다 프레임이
+ *  도착한 순간 각도를 래치하는 용도. */
+int32_t motor_get_pulse(motor_axis_t ax);
+int16_t motor_get_ddeg(motor_axis_t ax);
 
-/* ---------------------------------------------------------------------------
- *  🔧 스윕 축 선택 (임시 테스트용)
- *
- *  1 = **틸트 모터(TIM3_CH1 @ PA6)** 로 360도 스윕
- *  0 = 팬 모터(TIM1_CH2N @ PB14) 로 스윕  ← 정상 구성
- *
- *  왜 필요한가: 팬 모터에 홀센서(엔코더)가 달려 배선 때문에 축을 수직으로
- *  세울 수 없어, 임시로 틸트 모터에 라이다를 얹어 수평 360도 스캔을 한다.
- *  기구물(3D 프린팅)이 나오면 **반드시 0 으로 되돌릴 것.**
- *
- *  ⚠️ 스윕 축이 바뀌어도 scan.c 는 수정하지 않는다(motor_pan_* API 그대로).
- *    기록되는 각도도 pan 필드에 들어간다 — 물리적으로 수평 회전이므로 맞다.
- *
- *  전제: CubeMX NVIC 에 **TIM3 global interrupt** 가 켜져 있어야 스텝 카운트가
- *  된다(2026-07-29 강유근 반영 완료). 꺼지면 각도가 전부 0 으로 나온다.
- * ------------------------------------------------------------------------- */
-#define MOTOR_SWEEP_ON_TILT   1
+/* --- 엔코더 (블로킹 — 메인루프 전용, ISR 에서 호출 금지) ------------------*/
+HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out);
 
-/* ---------------------------------------------------------------------------
- *  팬 스윕 속도 (⚙️ 여기만 고치면 됨 — CubeMX 왕복 불필요)
- *
- *  1/16 마이크로스텝(1스텝 = 0.1125도) 기준 환산:
- *      100 pps →  11.25 도/s  → 한 바퀴 32.0초   (매우 안전, 초기 브링업값)
- *      200 pps →  22.5  도/s  → 한 바퀴 16.0초
- *      400 pps →  45.0  도/s  → 한 바퀴  8.0초   ← 기본값
- *      889 pps → 100.0  도/s  → 한 바퀴  3.6초   (스캔 설계 목표)
- *
- *  ⚠️ 가감속 램프가 아직 없어서(강유근 TODO) 정지 상태에서 곧바로 목표 속도로
- *    기동한다. 너무 높이면 탈조(step loss)가 나는데 **에러 없이 각도만 어긋나므로**
- *    반드시 실측으로 올릴 것: 한 바퀴 명령 후 마커가 제자리로 오는지 확인.
- *
- *  ⚠️ motor_init() 이 이 값으로 ARR 을 덮어쓴다. 즉 CubeMX 에서 ARR 을 바꿔도
- *    스캔 속도는 여기 값을 따른다(재생성이 속도를 조용히 바꾸는 사고 방지).
- * ------------------------------------------------------------------------- */
-#define MOTOR_PAN_PPS_DEFAULT   400u
-#define MOTOR_PAN_PPS_MIN        20u
-#define MOTOR_PAN_PPS_MAX      4000u
+/* 엔코더 실측각(도) → 펄스. 영점 상수를 적용한다. */
+int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg);
 
-/* 팬 STEP 펄스 주파수 설정. ARR/CCR 을 다시 계산해 듀티 50% 를 유지한다.
- * 범위를 벗어나면 무시된다. 스윕 중 호출은 권장하지 않음(펄스 폭 급변). */
-void motor_pan_set_pps(uint32_t pps);
+/* 재시도 포함 판독 후 펄스로 환산. 성공 시 HAL_OK 와 *out_pulse 반환.
+ * 부팅 직후용이라 HAL_Delay 를 쓴다 → 메인루프에서만 호출할 것. */
+HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse);
 
-/* 현재 팬 STEP 펄스 주파수(pps)를 타이머 레지스터에서 직접 산출.
- *
- * ⚠️ 상수로 박아두면 CubeMX 에서 ARR/PSC 를 바꿨을 때 **빌드 에러 없이**
- *   스캔 스윕 시간만 조용히 틀어진다(실제로 1000→100pps 변경 때 겪음).
- *   그래서 scan.c 는 이 함수로 매 스캔 시작 시 실측값을 가져간다. */
-uint32_t motor_get_pan_pps(void);
-
-/* 팬 누적 스텝 카운터 0 으로. 스윕 시작 전 또는 홈 완료 시 호출.
- * ⚠️ 리밋스위치 홈이 구현되면 그 시점에 호출해야 절대각이 맞는다(강유근). */
-void motor_pan_reset_steps(void);
-
-/* 현재 팬 절대각 (0.1도, 0~3599). 실제 STEP 펄스 카운트 기반. */
-int16_t motor_get_pan_ddeg(void);
-
-/* 현재 틸트 절대각 (0.1도, 부호).
- * ⚠️ 현재 0 고정 스텁 — MT6701 엔코더 실측은 강유근 구현. */
-int16_t motor_get_tilt_ddeg(void);
-
-/* 틸트를 목표 절대각(0.1도)으로 한 칸 이동.
- * ⚠️ 1축 임시 스캔에서는 호출되지 않는다(빈 스텁). 2축 기구 완성 후 강유근 구현. */
-void motor_tilt_step(int16_t target_ddeg);
+/* --- 타이머 ISR 진입점 ----------------------------------------------------
+ *  TIM1(Pan) / TIM2(Tilt) Base 인터럽트에서 호출. 호출 1회당 최대 1펄스.
+ *  분기·printf·I2C·Delay 없음 — 순수 펄스 발생과 카운터 증감만. */
+void motor_pan_isr(void);
+void motor_tilt_isr(void);
 
 #endif /* MOTOR_H */

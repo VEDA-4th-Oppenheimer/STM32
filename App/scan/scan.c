@@ -1,335 +1,385 @@
 /* ============================================================================
- *  scan.c  --  스캔 시퀀스 구현
+ *  scan.c  --  2축 스캔 시퀀서 구현
+ * ----------------------------------------------------------------------------
  *  담당: 이현우
- *
- *  [각도 산출 방식 — 실제 스텝 카운트]
- *    스윕 타이머(TIM1 또는 TIM3, motor.h 의 MOTOR_SWEEP_ON_TILT 선택)의
- *    업데이트 인터럽트가 STEP 펄스 1개마다 카운터를 올린다.
- *    scan 은 motor_get_pan_ddeg() / motor_get_tilt_ddeg() 만 호출하므로,
- *    강유근이 폐루프·엔코더·리밋스위치 홈을 넣어도 이 파일은 수정 불필요.
- *
- *    스윕 종료 판정은 "목표 스텝 수 도달"이 아니라 시간으로 한다.
- *    pps 는 scan_start() 가 motor_get_pan_pps() 로 타이머 레지스터에서
- *    실측하므로(상수 아님) PWM 하드웨어와 정확히 등가다.
- *
- *  [ISR / 메인루프 분리]
- *    scan_on_lidar_sample() 은 라이다 RX 완료 ISR 에서 불린다.
- *    거기서 UART 송신(HAL_UART_Transmit, ~0.95ms 블로킹)을 하면 라이다 바이트를
- *    놓치므로, ISR 에서는 링버퍼 적재만 하고 상행은 scan_tick() 에서 한다.
+ *  계약과 배경은 scan.h 상단 참조.
  * ==========================================================================*/
 #include "scan.h"
 #include "motor.h"
 #include "uart_rpi.h"
-#include "main.h"          /* HAL_GetTick */
-#include <string.h>
-#include <stdbool.h>
-
-/* ---- 하드웨어 상수 -------------------------------------------------------- */
-/* 스텝모터 17HS4401: 1.8도/full step = 200 step/회전 */
-#define FULL_STEPS_PER_REV   200u
-/* DRV8825 마이크로스텝 (MS1/MS2/MS3 물리 설정과 반드시 일치시킬 것)
- *   1/16 → 3200 step/회전, 1스텝 = 0.1125도
- *   1/32 → 6400 step/회전, 1스텝 = 0.05625도   ← 실물이 1/32 면 32 로 변경 */
-#define MICROSTEP            16u
-#define STEPS_PER_REV        (FULL_STEPS_PER_REV * MICROSTEP)   /* 3200 */
-
-/* STEP PWM 주파수(pps)는 상수로 두지 않고 motor_get_pan_pps() 로 실측한다.
- *
- * ⚠️ 과거에 1000 으로 박아뒀다가 CubeMX 에서 ARR 이 999→9999 로 바뀌면서
- *   실제 100pps 가 됐는데, 빌드는 통과하고 스윕만 1/10 만에 끝나 스캔이
- *   36도에서 멈추는 버그가 있었다. 레지스터에서 읽으면 재발하지 않는다.
- *
- * 각속도 참고(1/16 마이크로스텝, 1스텝 = 0.1125도):
- *    100 pps →  11.25 도/s (한 바퀴 32초)
- *   1000 pps → 112.50 도/s (한 바퀴 3.2초)
- * 스캔 목표 100도/s 를 맞추려면 약 889pps (ARR ≈ 1124). */
-static uint32_t s_pan_pps = 1u;      /* scan_start() 에서 실측값으로 갱신 */
-
-/* 래치 링버퍼 (ISR → 메인루프).
- * 16칸은 100Hz 기준 160ms분이라, 메인루프가 잠깐만 밀려도 넘쳤다(실측: 점 유실).
- * 64칸 = 640ms 여유. v5 로 엔트리가 18B 가 되어 RAM 64*20=1.3KB (여유 있음). */
-#define SCAN_FIFO_LEN        64u
-
-/* ---- 내부 상태 ------------------------------------------------------------ */
-/* ISR -> 메인루프 전달 단위. protocol.h v5 의 proto_scan_point 와 1:1 대응. */
-typedef struct {
-    int16_t  pan_ddeg;
-    int16_t  tilt_ddeg;
-    uint16_t d_mm;
-    uint16_t signal_strength;
-    uint32_t device_time_ms;
-    uint32_t stm_ts_ms;
-    uint8_t  dis_status;
-    uint8_t  range_precision;
-} scan_sample_t;
-
-static volatile scan_sample_t s_fifo[SCAN_FIFO_LEN];
-static volatile uint8_t  s_fifo_head = 0u;      /* ISR 이 씀   */
-static volatile uint8_t  s_fifo_tail = 0u;      /* 메인이 씀   */
-static volatile uint32_t s_dropped   = 0u;      /* FIFO 오버런 카운터 */
-static volatile uint32_t s_sent      = 0u;      /* 상행 완료 점 수     */
-/* 스캔이 방금 끝났음(1회성 플래그). main.c 가 최종 통계를 출력하고 소비한다. */
-static volatile uint8_t  s_just_finished = 0u;
+#include <stddef.h>
 
 /* ---------------------------------------------------------------------------
- *  스캔 상태
- *
- *  SC_SWEEP  : 측정 중 — 라이다 점을 래치한다
- *  SC_SETTLE : 방향 전환 전 로터 안정 대기 — 래치하지 않는다
- *  SC_REWIND : 되감기 중 — **점을 래치하지 않는다**
- *
- *  ⚠️ SC_SETTLE 이 필요한 이유(실측): 스윕 직후 곧바로 역방향으로 급기동하면
- *    로터가 아직 진동 중이라 CCW 초반에 스텝을 잃는다. 카운터는 명령한 펄스만
- *    세므로 "갔다"고 믿어 되감기가 일찍 끝나고, **스캔마다 +1.25도(11스텝)씩
- *    시작 각도가 밀렸다**(5회 연속 스캔 상호상관 측정: 0/1.50/2.75/4.00/4.75도).
- *    한 방향 연속 스윕은 탈조가 0이었으므로(358.9도) 원인은 방향 전환뿐이다.
- *
- *  ⚠️ 되감기가 필요한 이유: 라이다 케이블이 회전축에 감겨서 한 방향으로
- *    연속 회전을 못 한다(슬립링 없음). 스윕이 끝나면 같은 스텝만큼 역회전해
- *    케이블을 풀고 시작 각도로 복귀한다.
- *    부수 효과로 **책 층마다 같은 각도에서 시작**하게 되어 z층 정렬도 맞는다.
+ *  시퀀서 상태
  * ------------------------------------------------------------------------- */
-typedef enum {
-    SC_IDLE   = 0,
-    SC_SWEEP  = 1,
-    SC_SETTLE = 2,
-    SC_REWIND = 3
-} sc_state_t;
+static struct {
+    scan_state_t state;
+    bool         homed;
 
-/* 방향 전환 전 로터 안정 대기(ms).
- * 가감속 램프(강유근 TODO)가 들어오면 더 줄이거나 제거할 수 있다. */
-#define SCAN_SETTLE_MS   150u
+    /* 요청 (기구각, 0.1도) */
+    int16_t  pan_start_ddeg;
+    int16_t  pan_end_ddeg;
+    int16_t  tilt_start_ddeg;
+    int16_t  tilt_end_ddeg;
+    uint16_t step_ddeg;
 
-static volatile sc_state_t s_state = SC_IDLE;
-/* 스캔 전체(모든 줄) 동안 팬이 이동한 총 스텝 — 되감기 양. */
-static int32_t  s_scan_total_steps  = 0;
-static uint32_t s_sweep_start_tick   = 0u;      /* 현재 줄 스윕 시작 시각 */
-static uint32_t s_sweep_span_ms      = 0u;      /* 현재 줄 스윕 소요 시간 */
+    /* 진행 */
+    uint32_t line;          /* 현재 줄 (0 .. n_lines-1)            */
+    uint32_t n_lines;
+    bool     tilt_to_end;   /* 이번 줄이 start->end 방향인가       */
 
-/* 요청 파라미터 (스캔 중 불변) */
-static int16_t  s_pan_start_ddeg = 0;
-static int16_t  s_tilt_cur_ddeg  = 0;           /* 현재 줄의 틸트각 */
-static int16_t  s_tilt_end_ddeg  = 0;
-static uint16_t s_step_ddeg      = 10u;
+    /* 진단 (누적) */
+    uint32_t tilt_resync;   /* 틸트 줄 끝 재영점 횟수              */
+    uint32_t pan_deviate;   /* 팬 대조 이탈 횟수 (보정은 안 함)    */
 
-/* ---- 내부 헬퍼 ------------------------------------------------------------ */
+    /* 라이다 각도 래치 */
+    volatile int16_t latch_pan_ddeg;
+    volatile int16_t latch_tilt_ddeg;
+} s;
 
-/* 팬 스윕 각도폭(0.1도)을 소요 시간(ms)으로 환산.
+/* ---------------------------------------------------------------------------
+ *  보조
+ * ------------------------------------------------------------------------- */
+static void scan_report_err(uint8_t code)
+{
+    struct proto_err e;
+    e.code = code;
+    uart_rpi_send_frame((uint8_t)CMD_ERROR, &e, (uint8_t)sizeof(e));
+}
+
+/* 이번 줄의 팬 목표(펄스).
  *
- * ⚠️ 오버플로우 주의: (span * STEPS_PER_REV * 1000) 을 한 번에 곱하면
- *   3599 * 3200 * 1000 = 115억 > uint32 최대(43억) 로 넘친다.
- *   단계를 나눠 중간값을 작게 유지한다. */
-static uint32_t scan_span_to_ms(uint32_t span_ddeg)
+ * ⚠️ 반드시 **절대각에서** 계산한다. 1도 스텝을 펄스로 굳혀 매 줄 더하면
+ *   1 펄스가 1.125 ddeg 라 나머지가 누적된다(180줄에서 2도 이상 어긋남).
+ *   여기서 start + line*step 을 매번 통째로 환산하면 오차가 안 쌓인다. */
+static int32_t scan_pan_target_pulse(uint32_t line)
 {
-    /* ① 필요한 스텝 수 : 3599 * 3200 = 1151만 (uint32 안전) */
-    const uint32_t steps = (span_ddeg * STEPS_PER_REV) / 3600u;
-    /* ② 소요 시간(ms) : 3199 * 1000 = 320만 (uint32 안전) */
-    return (s_pan_pps != 0u) ? ((steps * 1000u) / s_pan_pps) : 0u;
+    const int32_t ddeg = (int32_t)s.pan_start_ddeg
+                       + ((int32_t)line * (int32_t)s.step_ddeg);
+    return motor_ddeg_to_pulse(ddeg);
 }
 
-/* 한 줄(팬 스윕) 시작 */
-static void scan_begin_line(void)
+/* 이번 줄 틸트 목표(펄스). serpentine 이라 줄마다 방향이 뒤집힌다. */
+static int32_t scan_tilt_target_pulse(void)
 {
-    /* 이전 줄에서 이동한 스텝을 되감기 총량에 누적한 뒤 카운터를 0 으로. */
-    s_scan_total_steps += motor_get_pan_steps();
-
-    s_sweep_start_tick = HAL_GetTick();
-    motor_pan_reset_steps();      /* 이 줄의 시작을 각도 0 기준으로 */
-    motor_pan_sweep_start();
+    return motor_ddeg_to_pulse(s.tilt_to_end ? (int32_t)s.tilt_end_ddeg
+                                             : (int32_t)s.tilt_start_ddeg);
 }
 
-/* ---- 공개 API ------------------------------------------------------------- */
+/* 엔코더 실측과 스텝카운트를 대조한다.
+ *   반환: 오차(ddeg, 부호). 판독 실패면 *ok=false.
+ * 메인루프 전용 — 블로킹 I2C 를 탄다. */
+static int32_t scan_encoder_error_ddeg(motor_axis_t ax, bool *ok)
+{
+    int32_t err = 0;
 
+#if SCAN_NO_ENCODER
+    /* 브링업 모드: 판독을 아예 시도하지 않는다.
+     * 단순히 실패시키는 것과 다르다 — 실패하면 motor_read_encoder_pulse 가
+     * 5회 × (I2C 타임아웃 10ms + 대기 10ms) = 약 100ms 를 잡아먹고, 그게
+     * 줄마다 두 축이면 스캔 전체에 36초가 헛돈다. 호출 자체를 건너뛴다. */
+    (void)ax;
+    *ok = false;               /* 호출자가 대조·재영점을 건너뛴다 */
+#else
+    int32_t enc_pulse = 0;
+
+    *ok = (motor_read_encoder_pulse(ax, &enc_pulse) == HAL_OK);
+    if (*ok) {
+        err = motor_pulse_to_ddeg(enc_pulse - motor_get_pulse(ax));
+    }
+#endif
+    return err;
+}
+
+static int32_t scan_abs32(int32_t v)
+{
+    return (v < 0) ? -v : v;
+}
+
+/* ---------------------------------------------------------------------------
+ *  수명주기
+ * ------------------------------------------------------------------------- */
 void scan_init(void)
 {
-    s_fifo_head = 0u;
-    s_fifo_tail = 0u;
-    s_dropped   = 0u;
-    s_state     = SC_IDLE;
+    s.state           = SC_IDLE;
+    s.homed           = false;
+    s.line            = 0u;
+    s.n_lines         = 0u;
+    s.tilt_to_end     = true;
+    s.tilt_resync     = 0u;
+    s.pan_deviate     = 0u;
+    s.latch_pan_ddeg  = 0;
+    s.latch_tilt_ddeg = 0;
+}
+
+void scan_home(void)
+{
+    /* 실제 판독은 scan_process 에서 한다 — 여기서 하면 uart_rpi 디스패처
+     * 안에서 수십 ms 를 블로킹하게 되고, 그 사이 들어온 프레임이 밀린다. */
+    s.state = SC_HOMING;
 }
 
 void scan_start(const struct proto_scan_start *ss)
 {
-    /* 중복 시작 방지 (MISRA 15.5: 단일 exit) */
-    if ((ss != NULL) && (s_state == SC_IDLE)) {
+    if (ss == NULL) {
+        /* 방어 — 디스패처가 크기를 검사하므로 정상 경로에서는 오지 않는다 */
+    } else if (!s.homed) {
+        scan_report_err((uint8_t)ERR_NOT_HOMED);
+    } else if (ss->step_ddeg == 0u) {
+        scan_report_err((uint8_t)ERR_OUT_OF_RANGE);
+    } else {
         int32_t span;
 
-        /* 스윕 시간 계산 전에 실제 STEP 주파수를 타이머에서 읽어온다.
-         * (CubeMX 에서 ARR 이 바뀌어도 스캔 범위가 틀어지지 않도록) */
-        s_pan_pps = motor_get_pan_pps();
+        s.pan_start_ddeg  = ss->pan_start_ddeg;
+        s.pan_end_ddeg    = ss->pan_end_ddeg;
+        s.tilt_start_ddeg = ss->tilt_start_ddeg;
+        s.tilt_end_ddeg   = ss->tilt_end_ddeg;
+        s.step_ddeg       = ss->step_ddeg;
 
-        s_pan_start_ddeg = ss->pan_start_ddeg;
-        s_tilt_cur_ddeg  = ss->tilt_start_ddeg;
-        s_tilt_end_ddeg  = ss->tilt_end_ddeg;
-        s_step_ddeg      = (ss->step_ddeg > 0u) ? ss->step_ddeg : 10u;
-
-        /* 팬 스윕 폭: end - start (0 이하면 한 바퀴로 간주) */
-        span = (int32_t)ss->pan_end_ddeg - (int32_t)ss->pan_start_ddeg;
-        if (span <= 0) {
-            span += 3600;             /* 0→0 또는 역순이면 360도 한 바퀴 */
+        /* 줄 수. 팬이 한 바퀴를 넘어 감기지 않도록 랩어라운드로 계산한다. */
+        span = (int32_t)s.pan_end_ddeg - (int32_t)s.pan_start_ddeg;
+        if (span < 0) {
+            span += 3600;
         }
-        s_sweep_span_ms = scan_span_to_ms((uint32_t)span);
+        /* 합성식을 바로 캐스트하지 않고 나눗셈 결과를 먼저 받는다 (MISRA 10.8) */
+        span = span / (int32_t)s.step_ddeg;
+        s.n_lines = (uint32_t)span + 1u;
 
-        s_fifo_head = 0u;
-        s_fifo_tail = 0u;
-        s_dropped   = 0u;
-        s_sent      = 0u;
-        s_scan_total_steps = 0;
-        s_state     = SC_SWEEP;
+        s.line        = 0u;
+        s.tilt_to_end = true;
+        s.tilt_resync = 0u;
+        s.pan_deviate = 0u;
 
-        scan_begin_line();
+        motor_enable();
+        motor_set_target(MOTOR_AXIS_PAN,  scan_pan_target_pulse(0u));
+        motor_set_target(MOTOR_AXIS_TILT,
+                         motor_ddeg_to_pulse((int32_t)s.tilt_start_ddeg));
+        s.state = SC_MOVE_START;
     }
 }
 
 void scan_stop(void)
 {
-    s_state = SC_IDLE;
-    s_scan_total_steps = 0;
-    motor_pan_stop();
-}
-
-void scan_get_stats(uint32_t *sent, uint32_t *dropped)
-{
-    if (sent != NULL)    { *sent    = s_sent; }
-    if (dropped != NULL) { *dropped = s_dropped; }
-}
-
-uint8_t scan_is_busy(void)
-{
-    return (s_state != SC_IDLE) ? 1u : 0u;
-}
-
-uint8_t scan_take_finished(void)
-{
-    const uint8_t f = s_just_finished;
-    s_just_finished = 0u;      /* 1회성 소비 */
-    return f;
-}
-
-/* ISR 문맥: 각도 래치 + 링버퍼 적재만. 절대 블로킹 금지. */
-void scan_on_lidar_sample(const lidar_sample_t *smp)
-{
-    if ((smp != NULL) && (s_state == SC_SWEEP)) {   /* 되감기 중 래치 안 함 */
-        const uint8_t head = s_fifo_head;
-        const uint8_t next = (uint8_t)((head + 1u) % SCAN_FIFO_LEN);
-
-        if (next == s_fifo_tail) {
-            s_dropped++;              /* 가득 참 — 메인루프가 밀림 */
-        } else {
-            /* 실제 STEP 펄스 카운트 기반 각도 (스윕 타이머 ISR 이 센 값).
-             * 스윕 시작각 + 이동각으로 절대각 산출. */
-            int32_t pan = (int32_t)s_pan_start_ddeg
-                        + (int32_t)motor_get_pan_ddeg();
-            pan %= 3600;
-
-            s_fifo[head].pan_ddeg        = (int16_t)pan;
-            s_fifo[head].tilt_ddeg       = s_tilt_cur_ddeg;  /* 1축이면 고정 */
-            s_fifo[head].d_mm            = (uint16_t)smp->raw_mm;
-            s_fifo[head].signal_strength = smp->signal_strength;
-            s_fifo[head].device_time_ms  = smp->device_time_ms;
-            s_fifo[head].stm_ts_ms       = HAL_GetTick();   /* 래치 시각 */
-            s_fifo[head].dis_status      = smp->dis_status;
-            s_fifo[head].range_precision = smp->range_precision;
-            s_fifo_head = next;
-        }
+    if (s.state != SC_IDLE) {
+        /* 지금 위치에서 멈추고 완료 통지까지 보낸다. 데몬은 SCAN_DONE 의
+         * point_count 로 실제 받은 점 수를 대조하므로, 중단이어도 통지가
+         * 있어야 "몇 점에서 끊겼는지" 를 알 수 있다. */
+        motor_set_target(MOTOR_AXIS_PAN,  motor_get_pulse(MOTOR_AXIS_PAN));
+        motor_set_target(MOTOR_AXIS_TILT, motor_get_pulse(MOTOR_AXIS_TILT));
+        s.state = SC_DONE;
     }
 }
 
-void scan_tick(void)
+bool scan_is_busy(void)
 {
-    /* 되감기 타이밍 — 이 함수 안에서만 쓰이므로 블록 스코프(MISRA 8.9) */
-    static uint32_t s_rewind_start_tick = 0u;
-    static uint32_t s_rewind_limit_ms   = 0u;   /* 안전망: 초과 시 강제 종료 */
-    static uint32_t s_settle_start_tick = 0u;   /* 방향 전환 전 안정 대기 */
+    return (s.state != SC_IDLE);
+}
 
-    /* ① 래치된 점 상행 (UART 블로킹은 여기서만) */
-    while (s_fifo_tail != s_fifo_head) {
-        const uint8_t tail = s_fifo_tail;
-        const scan_sample_t s = {
-            .pan_ddeg        = s_fifo[tail].pan_ddeg,
-            .tilt_ddeg       = s_fifo[tail].tilt_ddeg,
-            .d_mm            = s_fifo[tail].d_mm,
-            .signal_strength = s_fifo[tail].signal_strength,
-            .device_time_ms  = s_fifo[tail].device_time_ms,
-            .stm_ts_ms       = s_fifo[tail].stm_ts_ms,
-            .dis_status      = s_fifo[tail].dis_status,
-            .range_precision = s_fifo[tail].range_precision,
-        };
-        s_fifo_tail = (uint8_t)((tail + 1u) % SCAN_FIFO_LEN);
+scan_state_t scan_get_state(void)
+{
+    return s.state;
+}
+
+/* ---------------------------------------------------------------------------
+ *  상태별 처리
+ * ------------------------------------------------------------------------- */
+static void scan_do_homing(void)
+{
+#if SCAN_NO_ENCODER
+    /* 브링업 모드: 판독 없이 "지금 있는 자리 = 기구각 0" 으로 선언한다.
+     * 즉 사용자가 틸트를 바닥(nadir), 팬을 기준 방위에 물리적으로 맞춰 둔
+     * 상태여야 한다. 맞추지 않으면 산출물이 그 오차만큼 통째로 돌아간다.
+     *
+     * 엔코더 raw 는 0xFFFF 로 보낸다 — 14비트가 낼 수 없는 값이라 산출물만
+     * 보고도 "엔코더 없이 찍은 스캔" 임을 구분할 수 있다. 0 을 보내면 정상
+     * 판독값과 섞여 나중에 이 데이터를 신뢰해버릴 위험이 있다. */
+    struct proto_homed h;
+
+    motor_sync_pulse(MOTOR_AXIS_PAN,  0);
+    motor_sync_pulse(MOTOR_AXIS_TILT, 0);
+    s.homed = true;
+
+    /* 0xFFFF = 14비트 엔코더(최대 16383)가 낼 수 없는 값 → "미사용" 표식 */
+    h.pan_encoder_raw  = 0xFFFFu;
+    h.tilt_encoder_raw = 0xFFFFu;
+    h.pan_ddeg  = 0;
+    h.tilt_ddeg = 0;
+    uart_rpi_send_frame((uint8_t)CMD_HOMED, &h, (uint8_t)sizeof(h));
+#else
+    Encoder_t pan_enc;
+    Encoder_t tilt_enc;
+    bool      ok;
+
+    /* 절대 엔코더라 구동이 필요 없다 — 읽어서 현재 위치를 확정하면 끝.
+     * (리밋스위치 방식이라면 여기서 "리밋을 찾을 때까지 회전" 이 필요했다) */
+    ok = (motor_read_encoder(MOTOR_AXIS_PAN,  &pan_enc)  == HAL_OK)
+      && (motor_read_encoder(MOTOR_AXIS_TILT, &tilt_enc) == HAL_OK);
+
+    if (ok) {
+        const int32_t pan_pulse =
+            motor_encoder_deg_to_pulse(MOTOR_AXIS_PAN,  pan_enc.degree);
+        const int32_t tilt_pulse =
+            motor_encoder_deg_to_pulse(MOTOR_AXIS_TILT, tilt_enc.degree);
+
+        motor_sync_pulse(MOTOR_AXIS_PAN,  pan_pulse);
+        motor_sync_pulse(MOTOR_AXIS_TILT, tilt_pulse);
+        s.homed = true;
+
+        /* 엔코더 raw 를 함께 올린다. 영점 상수가 나중에 틀렸다고 밝혀져도
+         * raw 로부터 각도를 재계산할 수 있어야 이미 찍어둔 스캔을 안 버린다. */
         {
-            struct proto_scan_point pt;
-            pt.pan_ddeg        = s.pan_ddeg;
-            pt.tilt_ddeg       = s.tilt_ddeg;
-            pt.d_mm            = s.d_mm;
-            pt.signal_strength = s.signal_strength;
-            pt.device_time_ms  = s.device_time_ms;
-            pt.stm_ts_ms       = s.stm_ts_ms;
-            pt.dis_status      = s.dis_status;
-            pt.range_precision = s.range_precision;
-            uart_rpi_send_scan_point(&pt);
-        }
-        s_sent++;
-    }
-
-    /* ② 스윕 완료 판정 (MISRA 15.5: 단일 exit) */
-    if ((s_state == SC_SWEEP) &&
-        ((HAL_GetTick() - s_sweep_start_tick) >= s_sweep_span_ms)) {
-
-        /* 다음 줄이 있는가? (1축이면 tilt_cur == tilt_end 라 즉시 종료) */
-        const int32_t remain = (int32_t)s_tilt_end_ddeg - (int32_t)s_tilt_cur_ddeg;
-        const int32_t step   = (int32_t)s_step_ddeg;
-
-        if ((remain >= step) || (remain <= -step)) {
-            /* ── 2축: 틸트 한 칸 이동 후 다음 줄 ──
-             * ⚠️ motor_tilt_step() 은 현재 스텁(빈 함수). 강유근이 채우면
-             *    이 파일 수정 없이 2축 스캔이 된다.
-             * ⚠️ 여러 줄을 같은 방향으로 돌면 케이블이 줄 수만큼 감긴다.
-             *    2축 확장 시에는 줄마다 방향을 뒤집는 serpentine 이 정석. */
-            s_tilt_cur_ddeg = (int16_t)(s_tilt_cur_ddeg +
-                                        ((remain > 0) ? step : -step));
-            motor_tilt_step(s_tilt_cur_ddeg);
-            scan_begin_line();
-        } else {
-            /* ── 마지막 줄 → 측정 종료, 되감기 시작 ── */
-            motor_pan_stop();
-            s_scan_total_steps += motor_get_pan_steps();   /* 마지막 줄분 누적 */
-
-            uart_rpi_send_scan_done();      /* 데이터는 여기서 끝 (RPi 는 즉시 마감) */
-
-            if (s_scan_total_steps > 0) {
-                /* 로터 링잉이 잦아들 때까지 대기 후 역방향 (SC_SETTLE).
-                 * 곧바로 뒤집으면 CCW 초반에 스텝을 잃어 되감기가 짧아진다. */
-                s_settle_start_tick = HAL_GetTick();
-                s_state = SC_SETTLE;
-            } else {
-                s_state = SC_IDLE;
-                s_just_finished = 1u;
-            }
-        }
-    }
-    /* ③ 안정 대기 완료 → 역방향 기동 */
-    else if ((s_state == SC_SETTLE) &&
-             ((HAL_GetTick() - s_settle_start_tick) >= SCAN_SETTLE_MS)) {
-        /* 안전망: 되감기가 스윕보다 오래 걸릴 수 없다(같은 속도). */
-        s_rewind_limit_ms   = (s_sweep_span_ms * 2u) + 1000u;
-        s_rewind_start_tick = HAL_GetTick();
-        motor_pan_reset_steps();                   /* 0 에서 음수로 내려감 */
-        motor_pan_sweep_start_dir(MOTOR_DIR_CCW);
-        s_state = SC_REWIND;
-    }
-    /* ④ 되감기 완료 판정 — 시작 스텝만큼 역회전했거나 시간 초과 */
-    else if (s_state == SC_REWIND) {
-        const bool done    = (motor_get_pan_steps() <= -s_scan_total_steps);
-        const bool timeout = ((HAL_GetTick() - s_rewind_start_tick) >= s_rewind_limit_ms);
-
-        if (done || timeout) {
-            motor_pan_stop();
-            motor_pan_reset_steps();        /* 시작 각도 = 0 재정의 */
-            s_scan_total_steps = 0;
-            s_state = SC_IDLE;
-            s_just_finished = 1u;           /* main.c 가 최종 통계를 1회 출력 */
+            struct proto_homed h;
+            h.pan_encoder_raw  = pan_enc.raw_angle;
+            h.tilt_encoder_raw = tilt_enc.raw_angle;
+            h.pan_ddeg  = (int16_t)motor_pulse_to_ddeg(pan_pulse);
+            h.tilt_ddeg = (int16_t)motor_pulse_to_ddeg(tilt_pulse);
+            uart_rpi_send_frame((uint8_t)CMD_HOMED, &h, (uint8_t)sizeof(h));
         }
     } else {
-        /* 대기 상태 — 할 일 없음 */
+        /* 판독 실패를 조용히 넘기면 위치가 0 에 머물고 목표(0)와 우연히
+         * 일치해 "축이 안 움직였는데 홈 완료" 가 된다. 반드시 알린다.
+         *
+         * 코드는 ERR_NOT_HOMED 를 쓴다. 엔코더 I2C 전용 코드가 프로토콜에
+         * 없기도 하고, 홈이 실패한 뒤의 상태가 정확히 "홈 안 된 상태" 라
+         * 의미가 맞는다. 이 상태에서 SCAN_START 가 오면 같은 코드로 거절된다. */
+        s.homed = false;
+        scan_report_err((uint8_t)ERR_NOT_HOMED);
+    }
+#endif /* SCAN_NO_ENCODER */
+    s.state = SC_IDLE;
+}
+
+static void scan_do_line_end(void)
+{
+    bool ok;
+    const int32_t err = scan_encoder_error_ddeg(MOTOR_AXIS_TILT, &ok);
+
+    /* 틸트는 줄 끝마다 방향을 뒤집는다 — 1축 브링업에서 스캔당 1.25도씩
+     * 밀렸던 자리가 정확히 여기다. 엔코더로 재영점해 누적을 끊는다. */
+    if (ok && (scan_abs32(err) > SCAN_STALL_DDEG)) {
+        scan_report_err((uint8_t)ERR_STALL);
+        s.state = SC_DONE;
+    } else {
+        if (ok && (scan_abs32(err) > SCAN_RESYNC_DDEG)) {
+            int32_t enc_pulse = 0;
+            if (motor_read_encoder_pulse(MOTOR_AXIS_TILT, &enc_pulse) == HAL_OK) {
+                motor_sync_pulse(MOTOR_AXIS_TILT, enc_pulse);
+                s.tilt_resync++;
+            }
+        }
+
+        s.line++;
+        if (s.line >= s.n_lines) {
+            s.state = SC_DONE;
+        } else {
+            motor_set_target(MOTOR_AXIS_PAN, scan_pan_target_pulse(s.line));
+            s.state = SC_PAN_STEP;
+        }
+    }
+}
+
+static void scan_do_pan_step_done(void)
+{
+    bool ok;
+    const int32_t err = scan_encoder_error_ddeg(MOTOR_AXIS_PAN, &ok);
+
+    /* 팬은 **보정하지 않고 검증만** 한다.
+     * 정지 상태에서 1도(=9스텝)를 저속으로 가는 거라 탈조 위험이 사실상
+     * 없고, 폐루프 보정을 넣으면 엔코더 잡음으로 인한 불필요한 보정 이동이
+     * 오히려 새 실패 모드가 된다. 다만 리밋스위치가 없어 한 번 미끄러지면
+     * 남은 스캔 내내 어긋나는데 이를 잡을 다른 수단이 없으므로, 정지 중이라
+     * 공짜인 판독만 남겨 이탈을 셈한다. */
+    if (ok && (scan_abs32(err) > SCAN_STALL_DDEG)) {
+        scan_report_err((uint8_t)ERR_STALL);
+        s.state = SC_DONE;
+    } else {
+        if (ok && (scan_abs32(err) > SCAN_RESYNC_DDEG)) {
+            s.pan_deviate++;
+        }
+        s.tilt_to_end = !s.tilt_to_end;          /* serpentine 반전 */
+        motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
+        s.state = SC_SWEEP;
+    }
+}
+
+static void scan_do_done(void)
+{
+    uart_rpi_send_scan_done();
+
+    /* 다음 스캔을 바로 걸 수 있도록 팬만 시작점으로 되돌린다.
+     * 모터 계층이 알아서 굴러가므로 여기서 기다리지 않는다 — 통지를
+     * 먼저 보내야 데몬이 산출물을 마감할 수 있다. */
+    if (s.homed) {
+        motor_set_target(MOTOR_AXIS_PAN, scan_pan_target_pulse(0u));
+    }
+    s.state = SC_IDLE;
+}
+
+void scan_process(void)
+{
+    switch (s.state) {
+    case SC_HOMING:
+        scan_do_homing();
+        break;
+
+    case SC_MOVE_START:
+        if (motor_is_idle(MOTOR_AXIS_PAN) && motor_is_idle(MOTOR_AXIS_TILT)) {
+            s.tilt_to_end = true;
+            motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
+            s.state = SC_SWEEP;
+        }
+        break;
+
+    case SC_SWEEP:
+        if (motor_is_idle(MOTOR_AXIS_TILT)) {
+            s.state = SC_LINE_END;
+        }
+        break;
+
+    case SC_LINE_END:
+        scan_do_line_end();
+        break;
+
+    case SC_PAN_STEP:
+        if (motor_is_idle(MOTOR_AXIS_PAN)) {
+            scan_do_pan_step_done();
+        }
+        break;
+
+    case SC_DONE:
+        scan_do_done();
+        break;
+
+    case SC_IDLE:
+    default:
+        break;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ *  라이다 연동
+ * ------------------------------------------------------------------------- */
+void scan_latch_angles(int16_t *out_pan_ddeg, int16_t *out_tilt_ddeg)
+{
+    /* ISR 에서 호출된다. 모터 카운터를 읽기만 하고(32비트 정렬 워드라 원자적)
+     * 상태를 바꾸지 않으므로 안전하다. */
+    if (out_pan_ddeg != NULL) {
+        *out_pan_ddeg = motor_get_ddeg(MOTOR_AXIS_PAN);
+    }
+    if (out_tilt_ddeg != NULL) {
+        *out_tilt_ddeg = motor_get_ddeg(MOTOR_AXIS_TILT);
+    }
+}
+
+void scan_submit_sample(int16_t pan_ddeg, int16_t tilt_ddeg,
+                        uint16_t d_mm, uint16_t signal_strength,
+                        uint32_t device_time_ms,
+                        uint8_t dis_status, uint8_t range_precision)
+{
+    /* 스윕 구간의 점만 올린다. 줄 끝 정지·팬 이동 중의 점은 격자에 넣을
+     * 각도가 아니다(같은 각도에 몰려 중복만 만든다). */
+    if (s.state == SC_SWEEP) {
+        uart_rpi_send_scan_point(pan_ddeg, tilt_ddeg, d_mm, signal_strength,
+                                 device_time_ms, dis_status, range_precision);
     }
 }

@@ -29,22 +29,17 @@ void uart_rpi_process(void);
 /* protocol.h 프레임 조립 후 USART1 로 상행 송신 (PONG/HOMED/DISTANCE ...). */
 void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
 
-uint32_t uart_rpi_get_last_hb_tick(void);
 
-/* 브링업 진단 카운터 (RPi 링크 문제 해결 후 제거 가능).
- *   rx=0                   → USART1 에 바이트가 안 옴 (배선/RPi 미송신)
- *   rx>0, frames=0, crc=0  → 프레임 경계를 못 잡음 (SOF 불일치)
- *   crc_err>0              → 바이트는 오는데 깨짐 (baud/GND/노이즈)
- *   frames>0, tx=0         → 파싱은 되는데 응답 안 함 (디스패치)
- *   frames>0, tx>0         → STM 은 정상 → RPi 수신측 문제 */
-void uart_rpi_get_diag(uint32_t *rx, uint32_t *frames, uint32_t *crc_err,
-                       uint32_t *tx_frames);
-
-
-/* 스캔 점 1개 상행 (CMD_SCAN_DATA).
- *   v5 부터 원시 품질 필드까지 8개라 개별 인자 대신 구조체를 그대로 받는다.
+/* 스캔 점 1개 상행 (CMD_SCAN_DATA, protocol v5):
+ *   pan/tilt = 기구각(0.1°, 틸트는 부호), d_mm = 거리.
+ *   나머지는 TOFSense-F2P 프레임 원본 그대로 — 정규화도 유효성 판정도 하지
+ *   않는다(판정 기준이 바뀌어도 재해석할 수 있어야 하므로). stm_ts_ms 는
+ *   내부에서 HAL_GetTick() 으로 채운다.
  *   내부 point 카운터(s_scan_count)를 1 증가시킨다. */
-void uart_rpi_send_scan_point(const struct proto_scan_point *pt);
+void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
+                              uint16_t d_mm, uint16_t signal_strength,
+                              uint32_t device_time_ms,
+                              uint8_t dis_status, uint8_t range_precision);
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE):
  *   이번 스캔에서 상행한 총 point 수(내부 카운터)를 담아 전송.

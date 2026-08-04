@@ -4,16 +4,6 @@
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -22,10 +12,12 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "uart_rpi.h"      /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
-#include "motor.h"         /* 스텝모터 2축 (테스트 스텁) */
-#include "lidar.h"         /* 라이다 센서 드라이버 모듈 (송영빈) */
-#include "scan.h"          /* 스캔 시퀀스 — motor+lidar+uart_rpi 조율 (이현우) */
+#include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
+
+#include "hallEffectSensor.h"   /* 홀센서 (강유근) */
+#include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
+#include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
+#include "lidar.h"              /* TOFSense-F2P 수신 (USART6, 송영빈)       */
 
 /* USER CODE END Includes */
 
@@ -36,10 +28,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* ⚠️ 브링업 전용 스위치 — RPi 없이 STM32 단독 테스트할 때 1.
- *   IWDG 를 무조건 먹여 리셋을 막는다(하트비트 감시 무력화).
- *   실제 운용/데모 전에는 반드시 0 으로 되돌릴 것. */
-#define BRINGUP_NO_RPI   1
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,7 +43,7 @@ I2C_HandleTypeDef hi2c3;
 IWDG_HandleTypeDef hiwdg;
 
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
@@ -70,24 +59,13 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_I2C3_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-static const char *lidar_confidence_to_str(lidar_confidence_t c)
-{
-  const char *result = "UNKNOWN";
-  switch (c)
-  {
-    case LIDAR_CONF_INVALID: result = "INVALID"; break;
-    case LIDAR_CONF_LOW:     result = "LOW";      break;
-    case LIDAR_CONF_HIGH:    result = "HIGH";     break;
-    default:                                      break;
-  }
-  return result;
-}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -127,115 +105,49 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
-  MX_TIM3_Init();
   MX_USART6_UART_Init();
   MX_IWDG_Init();
   MX_I2C3_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  /* printf 버퍼링 끄기 — 임베디드 newlib 는 stdout 이 기본 full-buffered라
-   * setvbuf 없으면 짧은 printf 가 버퍼에 갇혀 VCP 로 안 나온다. */
+
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("\r\n=== turret STM32 boot (proto v%u) ===\r\n", PROTO_VERSION);
 
   uart_rpi_init(&huart1);                  // USART1(RPi 링크) 수신 시작
-  lidar_init(&huart6);                     // 📡 USART6(라이다 센서) 드라이버 기동 및 인터럽트 시작
-  motor_init(&htim1, &htim3);              // 스텝모터 2축 (팬=TIM1_CH2N, 틸트=TIM3_CH1)
 
-  scan_init();                             // 스캔 시퀀스 초기화
-  lidar_set_sample_callback(scan_on_lidar_sample);  // 라이다 도착 → 각도 래치 배선
+
+  motor_init();                            // 축 드라이버 (전류 차단 상태로 시작)
+  scan_init();                             // 스캔 시퀀서
+  lidar_init(&huart6);                     // USART6(라이다) 수신 시작
+
+  // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
+  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
+  //   TIM1 : 84MHz/84/2500 = 400Hz  (Pan)
+  //   TIM2 : 84MHz/84/1250 = 800Hz  (Tilt, 0.1125도/펄스 -> 90도/s)
+  HAL_TIM_Base_Start_IT(&htim1);
+  HAL_TIM_Base_Start_IT(&htim2);
+
+
+  // 홈/스캔 시퀀스는 여기서 걸지 않는다. CMD_HOME / CMD_SCAN_START 를 받아
+  // App/scan 이 메인루프에서 수행한다.
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
+
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
-    scan_tick();                           // 래치된 스캔 점 상행 + 스윕 진행 판정
+    lidar_process();                       // 라이다 샘플 큐 → scan 제출
+    scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
+    HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
-    /* 스캔 완료 직후 최종 품질 집계 1회 출력 (유실 여부 확인용) */
-    if (scan_take_finished() != 0u)
-    {
-      uint32_t sent = 0, dropped = 0;
-      scan_get_stats(&sent, &dropped);
-      printf("[SCAN ] 완료: 상행 %lu점, 유실 %lu점%s\r\n",
-             (unsigned long)sent, (unsigned long)dropped,
-             (dropped == 0u) ? " (정상)" : "  ← 메인루프 지연!");
-    }
-    /* 💡 조건부 IWDG Feed (하트비트 연동) */
-    uint32_t now = HAL_GetTick();
-    uint32_t last_hb = uart_rpi_get_last_hb_tick();
 
-    // 부팅 직후(첫 PING 수신 전)에는 초기화 유예 시간을 주거나,
-    // 부팅 완료 후 첫 PING을 받기 시작한 시점부터 타임아웃 검사
-#if BRINGUP_NO_RPI
-    (void)now; (void)last_hb;
-    HAL_IWDG_Refresh(&hiwdg);            // ⚠️ 브링업: 무조건 갱신 (하트비트 감시 OFF)
-#else
-    if (last_hb > 0 && (now - last_hb < HB_TIMEOUT_MS))
-    {
-      HAL_IWDG_Refresh(&hiwdg);          // 300ms 이내에 PING이 왔을 때만 워치독 먹임
-    }
-    else if (last_hb == 0 && now < 3000)
-    {
-      HAL_IWDG_Refresh(&hiwdg);          // 부팅 직후 3초간은 RPi 접속 대기를 위해 갱신 허용
-    }
-#endif
-    // ➔ 만약 RPi 하트비트가 300ms 이상 끊기면 Refresh가 중단되어 IWDG 타임아웃으로 MCU HW 리셋 발생!
-    /* ※ 라이다는 액티브 모드 100Hz 로 스스로 출력함이 확인됨(2026-07-28).
-     *   (쿼리 10회/초 대비 유효패킷 100개/초 → 센서 자체 출력)
-     *   따라서 쿼리 송신은 불필요하며, 스캔 중 USART6 TX 점유만 유발하므로 제거함.
-     *   필요 시 lidar_send_query() 로 재현 가능. */
-
-    /* [브링업 진단] 라이다 상태 — 1초 간격
-     *  ⚠️ 10ms 간격 출력은 USART2 를 39% 점유해 메인루프를 막았다(printf 는 블로킹).
-     *     진단이 끝나면 이 블록 자체를 제거할 것. */
-    static uint32_t last_print_tick = 0;
-    /* ⚠️ 스캔·되감기 중에는 절대 출력하지 않는다.
-     *   printf 한 묶음이 ~10ms 블로킹인데, 되감기 완료 판정 순간에 걸리면
-     *   그동안 9~18 스텝(1~2도)이 더 나가 축이 과도하게 되감긴다.
-     *   실측: 연속 2회 스캔 상호상관에서 -2도/회 드리프트로 나타났다. */
-
-    if ((scan_is_busy() == 0u) && ((HAL_GetTick() - last_print_tick) >= 1000u))
-    {
-      uint16_t d = lidar_get_distance_mm();
-      uint8_t  st = lidar_get_dis_status();
-      uint16_t inten = lidar_get_intensity();
-      uint16_t stime = lidar_get_system_time_ms();
-      lidar_confidence_t conf = lidar_get_confidence();
-      uint32_t rx = 0, ok = 0, bad = 0;
-      uint8_t  rc = 0; uint32_t rxst = 0, errc = 0;
-      lidar_get_diag(&rx, &ok, &bad);
-      lidar_get_uart_diag(&rc, &rxst, &errc);
-
-      printf("[LiDAR] d=%u.%03u m | status=%u intensity=%u sys_t=%ums conf=%s"
-             " | rx=%lu ok=%lu bad=%lu | rc=%u rxst=0x%02lX err=0x%lX\r\n",
-             d / 1000u, d % 1000u,
-             st, inten, stime, lidar_confidence_to_str(conf),
-             (unsigned long)rx, (unsigned long)ok, (unsigned long)bad,
-             (unsigned)rc, (unsigned long)rxst, (unsigned long)errc);
-
-      {
-        uint32_t prx = 0, pfr = 0, pcrc = 0, ptx = 0;
-        uart_rpi_get_diag(&prx, &pfr, &pcrc, &ptx);
-        printf("[RPi  ] rx=%lu frames=%lu crc_err=%lu tx=%lu\r\n",
-               (unsigned long)prx, (unsigned long)pfr,
-               (unsigned long)pcrc, (unsigned long)ptx);
-      }
-
-      uint32_t sent = 0, dropped = 0;
-      scan_get_stats(&sent, &dropped);
-      if (dropped > 0u)
-      {
-        printf("[SCAN ] !! 점 유실 %lu개 (상행 %lu개) — 메인루프 지연\r\n",
-               (unsigned long)dropped, (unsigned long)sent);
-      }
-
-      last_print_tick = HAL_GetTick();   /* ← 원래 코드에 누락돼 있었음 */
-    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
   }
   /* USER CODE END 3 */
 }
@@ -303,7 +215,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.ClockSpeed = 400000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -337,7 +249,7 @@ static void MX_I2C3_Init(void)
 
   /* USER CODE END I2C3_Init 1 */
   hi2c3.Instance = I2C3;
-  hi2c3.Init.ClockSpeed = 100000;
+  hi2c3.Init.ClockSpeed = 400000;
   hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c3.Init.OwnAddress1 = 0;
   hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -397,8 +309,6 @@ static void MX_TIM1_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
 
@@ -406,7 +316,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 84-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 10000-1;
+  htim1.Init.Period = 2500-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -419,101 +329,60 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 500;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
 
 }
 
 /**
-  * @brief TIM3 Initialization Function
+  * @brief TIM2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM3_Init(void)
+static void MX_TIM2_Init(void)
 {
 
-  /* USER CODE BEGIN TIM3_Init 0 */
+  /* USER CODE BEGIN TIM2_Init 0 */
 
-  /* USER CODE END TIM3_Init 0 */
+  /* USER CODE END TIM2_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
+  /* USER CODE BEGIN TIM2_Init 1 */
 
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 84-1;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 10000-1;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 84-1;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 1250-1;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 500;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM3_Init 2 */
+  /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* USER CODE END TIM3_Init 2 */
-  HAL_TIM_MspPostInit(&htim3);
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -635,10 +504,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|TILT_DIRB10_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -646,15 +515,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD2_Pin TILT_DIR_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin|TILT_DIR_Pin;
+  /*Configure GPIO pins : LD2_Pin TILT_STEP_Pin TILT_DIR_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PAN_EN_Pin TILT_DIRB10_Pin PAN_DIR_Pin TILT_EN_Pin */
-  GPIO_InitStruct.Pin = PAN_EN_Pin|TILT_DIRB10_Pin|PAN_DIR_Pin|TILT_EN_Pin;
+  /*Configure GPIO pins : PAN_EN_Pin PAN_STEP_Pin PAN_DIR_Pin TILT_EN_Pin */
+  GPIO_InitStruct.Pin = PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -667,13 +536,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(PAN_CAILI_SWITCH_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /*Configure GPIO pin : PB0 (LED2 - external) */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -685,28 +548,32 @@ int __io_putchar(int ch)
   return ch;
 }
 
-/* HAL 콜백 → 등록된 각 모듈로 인터럽트 수신 위임 */
+/* HAL UART 콜백 → uart_rpi 모듈로 위임 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART1)
-  {
-    uart_rpi_on_rx_cplt(huart);        // RPi 전용 포트
-  }
-  else if (huart->Instance == USART6)
-  {
-    lidar_on_rx_cplt(huart);           // 라이다 센서 전용 포트
-  }
+  // 각 모듈이 자기 인스턴스인지 확인 후 처리한다 (USART1=RPi, USART6=라이다)
+  uart_rpi_on_rx_cplt(huart);
+  lidar_on_rx_cplt(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART1)
-  {
-    uart_rpi_on_error(huart);
+  uart_rpi_on_error(huart);
+  lidar_on_error(huart);
+}
+
+/**
+  * @brief  타이머 인터럽트 콜백 (신규 추가: 모터 스텝 제어용)
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  // TIM1 (Pan 400Hz) / TIM2 (Tilt 800Hz).
+  // 두 핸들러 모두 펄스 1개만 내고 즉시 반환한다 — 분기·printf·I2C·Delay 금지.
+  if (htim->Instance == TIM1) {
+    motor_pan_isr();
   }
-  else if (huart->Instance == USART6)
-  {
-    lidar_on_error(huart);
+  else if (htim->Instance == TIM2) {
+    motor_tilt_isr();
   }
 }
 /* USER CODE END 4 */
@@ -720,9 +587,9 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
-  }
+  // while (1)
+  // {
+  // }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

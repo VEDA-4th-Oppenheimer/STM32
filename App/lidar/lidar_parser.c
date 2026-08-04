@@ -1,17 +1,22 @@
+/* ============================================================================
+ *  lidar_parser.c  --  TOFSense-F2P NLink Frame0 파서 구현
+ *  담당: 송영빈 (원 구현) / 이현우 (v5 필드 확장)
+ *  계약은 lidar_parser.h 상단 참조.
+ * ==========================================================================*/
 #include "lidar_parser.h"
 #include <stddef.h>
 
-/* 패킷 내 바이트 인덱스 (TOFSense Frame0, 16B) */
+/* 패킷 내 바이트 인덱스 (데이터시트 Frame0 레이아웃) */
 enum {
     IDX_HEADER      = 0,
     IDX_FUNC_MARK   = 1,
-    IDX_SYSTIME     = 4,     /* 4바이트 */
-    IDX_DIST_LOW    = 8,
+    IDX_TIME_0      = 4,     /* system time     u32 LE (4..7)   */
+    IDX_DIST_LOW    = 8,     /* distance        u24 LE (8..10)  */
     IDX_DIST_MID    = 9,
     IDX_DIST_HIGH   = 10,
     IDX_STATUS      = 11,
-    IDX_STRENGTH_LO = 12,
-    IDX_STRENGTH_HI = 13,
+    IDX_SIGNAL_LOW  = 12,    /* signal strength u16 LE (12..13) */
+    IDX_SIGNAL_HIGH = 13,
     IDX_PRECISION   = 14,
     IDX_CHECKSUM    = 15
 };
@@ -36,68 +41,39 @@ bool lidar_parser_is_func_mark(uint8_t byte)
     return (byte == (uint8_t)LIDAR_FUNC_MARK);
 }
 
-void lidar_parser_peek_raw(const uint8_t *buf, lidar_sample_t *out)
-{
-    if ((buf != NULL) && (out != NULL))
-    {
-        out->raw_mm = ((uint32_t)buf[IDX_DIST_LOW]) |
-                      (((uint32_t)buf[IDX_DIST_MID])  << 8U) |
-                      (((uint32_t)buf[IDX_DIST_HIGH]) << 16U);
-
-        out->device_time_ms = ((uint32_t)buf[IDX_SYSTIME])              |
-                              (((uint32_t)buf[IDX_SYSTIME + 1U]) << 8U)  |
-                              (((uint32_t)buf[IDX_SYSTIME + 2U]) << 16U) |
-                              (((uint32_t)buf[IDX_SYSTIME + 3U]) << 24U);
-
-        out->signal_strength = (uint16_t)(((uint16_t)buf[IDX_STRENGTH_LO]) |
-                                          (((uint16_t)buf[IDX_STRENGTH_HI]) << 8U));
-
-        out->dis_status      = buf[IDX_STATUS];
-        out->range_precision = buf[IDX_PRECISION];
-        out->confidence      = LIDAR_CONF_INVALID;
-    }
-}
-
-bool lidar_parser_validate(const uint8_t *buf, lidar_sample_t *out)
+bool lidar_parser_parse(const uint8_t *buf, lidar_frame_t *out)
 {
     bool is_valid = false;
 
     if ((buf != NULL) && (out != NULL))
     {
+        /* 체크섬은 전송 무결성 검사라 여기서 본다.
+         * 그 외의 판정(거리 범위 / dis_status / 신호세기)은 하지 않는다 —
+         * 펌웨어가 버리면 그 점은 영영 복구되지 않기 때문. */
         const uint8_t expected_chk = calc_checksum(buf, (uint8_t)(LIDAR_PACKET_SIZE - 1U));
-        const uint8_t actual_chk   = (uint8_t)buf[IDX_CHECKSUM];
+        const uint8_t actual_chk   = buf[IDX_CHECKSUM];
 
         if (expected_chk == actual_chk)
         {
-            lidar_sample_t s = {0};
-            lidar_parser_peek_raw(buf, &s);
+            out->device_time_ms = ((uint32_t)buf[IDX_TIME_0])               |
+                                  (((uint32_t)buf[IDX_TIME_0 + 1]) <<  8U) |
+                                  (((uint32_t)buf[IDX_TIME_0 + 2]) << 16U) |
+                                  (((uint32_t)buf[IDX_TIME_0 + 3]) << 24U);
 
-            /* 🚨 문서 충돌 (2026-07-29 확인, 미해결):
-             *   Datasheet V2.0 Table 5 : 0 = invalid, 1 = valid
-             *   User Manual  Table 2   : status=0 예제 프레임을 정상값으로 제시
-             *   실측으로 판별되기 전까지는 둘 다 통과시키고 status 는 원본 그대로 넘긴다. */
-            if ((s.dis_status == 0U) || (s.dis_status == 1U))
+            out->d_mm = ((uint32_t)buf[IDX_DIST_LOW])           |
+                        (((uint32_t)buf[IDX_DIST_MID])  <<  8U) |
+                        (((uint32_t)buf[IDX_DIST_HIGH]) << 16U);
+
             {
-                if ((s.raw_mm >= LIDAR_MIN_RANGE_MM) && (s.raw_mm <= LIDAR_MAX_RANGE_MM))
-                {
-                    if (s.signal_strength == 0U)
-                    {
-                        /* 강도 0 → 무효, is_valid 그대로 false */
-                    }
-                    else if ((s.dis_status == 1U) || (s.signal_strength < LIDAR_MIN_INTENSITY))
-                    {
-                        s.confidence = LIDAR_CONF_LOW;
-                        *out = s;
-                        is_valid = true;
-                    }
-                    else
-                    {
-                        s.confidence = LIDAR_CONF_HIGH;
-                        *out = s;
-                        is_valid = true;
-                    }
-                }
+                const uint32_t sig = ((uint32_t)buf[IDX_SIGNAL_LOW]) |
+                                     (((uint32_t)buf[IDX_SIGNAL_HIGH]) << 8U);
+                out->signal_strength = (uint16_t)sig;
             }
+
+            out->dis_status      = buf[IDX_STATUS];
+            out->range_precision = buf[IDX_PRECISION];
+
+            is_valid = true;
         }
     }
 

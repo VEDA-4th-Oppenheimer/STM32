@@ -1,3 +1,32 @@
+/* ============================================================================
+ *  lidar_parser.h  --  TOFSense-F2P NLink Frame0 파서
+ * ----------------------------------------------------------------------------
+ *  담당: 송영빈 (원 구현) / 이현우 (v5 필드 확장)
+ *
+ *  ★ 파서는 **거르지 않는다.** 체크섬만 보고, 나머지는 프레임에 실려온 값을
+ *    그대로 넘긴다. 유효성 판정(거리 범위·dis_status·신호세기)은 RPi 데몬 몫이다.
+ *
+ *    왜: 판정 기준이 바뀌면 이미 찍어둔 스캔을 다시 해석할 수 있어야 한다.
+ *    펌웨어가 미리 버리면 그 점은 영영 복구되지 않는다. 실제로 1축 브링업에서
+ *    거리 상한 필터 때문에 먼 벽이 잘려나간 적이 있고, 그때 쓰던 상한도
+ *    F2P 사양(25m)이 아니었다.
+ *
+ *  NLink Frame0 (16바이트) 레이아웃 — 데이터시트 대조 확인분:
+ *    [0]      header 0x57
+ *    [1]      function mark 0x00
+ *    [2]      reserved
+ *    [3]      id
+ *    [4..7]   system time (u32, LE)   라이다 자체 시계(ms)
+ *    [8..10]  distance    (u24, LE)   mm
+ *    [11]     distance status         1=valid, 0=invalid  ※ 아래 참조
+ *    [12..13] signal strength (u16, LE)
+ *    [14]     range precision         F2P 는 미지원(0xFF 고정)
+ *    [15]     checksum = [0..14] 바이트 합의 하위 8비트
+ *
+ *  ⚠️ dis_status 의미: 데이터시트는 1=valid 인데 매뉴얼 예제는 반대로 적혀 있다.
+ *    1축 브링업 실측에서 유효점 359/359 가 전부 1 이었으므로 **데이터시트가
+ *    맞다**. 다만 여기서 걸러내지는 않는다 — 값만 그대로 올린다.
+ * ==========================================================================*/
 #ifndef LIDAR_PARSER_H
 #define LIDAR_PARSER_H
 
@@ -8,51 +37,23 @@
 #define LIDAR_FUNC_MARK       0x00U
 #define LIDAR_PACKET_SIZE     16U
 
-/* 신호 강도 문턱값 및 유효 거리 범위
- * TOFSense-F2 P Datasheet V2.0 Table 1 실측 확인 (2026-07-29):
- *   Typical Ranging Distance : 0.05 ~ 25.0 m, Blind Area: 5cm
- * 하한은 blind area이자 범위초과(raw=0) 배제 역할을 겸함. */
-#define LIDAR_MIN_INTENSITY   10U      /* 노이즈 필터링 문턱값 */
-#define LIDAR_MIN_RANGE_MM    50U      /* 0.05 m */
-#define LIDAR_MAX_RANGE_MM    25000U   /* 25 m */
-
-typedef enum {
-    LIDAR_CONF_INVALID = 0U,  /* 무효 데이터 (체크섬/상태 이상/노이즈) */
-    LIDAR_CONF_LOW     = 1U,  /* 신호 강도 약함 또는 경계값 (주의) */
-    LIDAR_CONF_HIGH    = 2U   /* 신뢰성 높은 정상 데이터 */
-} lidar_confidence_t;
-
-/* ---------------------------------------------------------------------------
- *  파싱 결과 — 센서 원본값 + 종합 판정된 confidence
- *  ⚠️ signal_strength 는 calibrated reflectivity 가 아니므로
- *    재질 판별에 단독 사용 금지(PointCloud 계획서 §6.2).
- * ------------------------------------------------------------------------- */
+/* 프레임에서 뽑아낸 원본 값. 가공하지 않는다. */
 typedef struct {
-    uint32_t           raw_mm;           /* 거리 (mm)                 */
-    uint32_t           device_time_ms;   /* 라이다 system time 원본   */
-    uint16_t           signal_strength;  /* 신호세기 원본             */
-    uint8_t            dis_status;       /* 거리상태 원본             */
-    uint8_t            range_precision;  /* 거리정밀도 원본           */
-    lidar_confidence_t confidence;       /* 종합 평가된 신뢰도        */
-} lidar_sample_t;
+    uint32_t device_time_ms;    /* 라이다 자체 시계          */
+    uint32_t d_mm;              /* 24비트라 uint32 로 받는다 */
+    uint16_t signal_strength;
+    uint8_t  dis_status;
+    uint8_t  range_precision;
+} lidar_frame_t;
 
+/* 헤더/펑션마크 바이트 판별 (수신 상태머신 동기화용) */
 bool lidar_parser_is_header(uint8_t byte);
 bool lidar_parser_is_func_mark(uint8_t byte);
 
-/**
- * @brief 검증 여부와 무관하게 원시 필드만 추출 (실패 패킷 진단용).
- *        체크섬 검사를 하지 않으므로 값이 깨져 있을 수 있다.
- */
-void lidar_parser_peek_raw(const uint8_t *buf, lidar_sample_t *out);
-
-/**
- * @brief 16바이트 패킷을 검증(체크섬 + 센서 상태 + 유효 범위 + 강도)하고
- *        통과하면 원시 필드 + confidence 를 out 에 담아 반환
- * @return true  = 유효한 패킷 (out 갱신됨)
- *         false = 체크섬 불일치 / 상태 이상 / 범위 밖 / 강도 0 → out 미변경
- * @note   실패해도 dis_status 등은 진단에 쓸 수 있으니 필요하면
- *         lidar_parser_peek_raw() 로 따로 꺼낸다.
- */
-bool lidar_parser_validate(const uint8_t *buf, lidar_sample_t *out);
+/* 완성된 16바이트 패킷의 체크섬을 검증하고 필드를 out 에 채운다.
+ *   반환 true  = 체크섬 통과, out 유효
+ *        false = 체크섬 불일치 (out 미변경)
+ * 체크섬 외의 이유로는 실패하지 않는다 — 거르는 건 데몬 몫. */
+bool lidar_parser_parse(const uint8_t *buf, lidar_frame_t *out);
 
 #endif /* LIDAR_PARSER_H */
