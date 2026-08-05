@@ -25,6 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cppcheck cmake ninja-build gcc-arm-none-eabi
+          cppcheck --version   # 러너의 cppcheck 버전 기록 (apt 무버전 설치라 이미지 따라 바뀜)
 
       - name: Firmware cppcheck (Core/Src, -D__GNUC__, --error-exitcode=1)
         run: bash tools/run_static_analysis.sh
