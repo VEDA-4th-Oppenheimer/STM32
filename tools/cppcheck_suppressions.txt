@@ -41,7 +41,7 @@ misra-c2012-20.1:*shared/protocol.h
 #   게이트 정책 A = Required/Mandatory 만 차단, Advisory 는 리포트만.
 #   cppcheck misra 애드온에 등급 필터가 없어, 실제로 뜨는 Advisory 룰을
 #   근거를 달아 개별 등록한다. 폴더 통째 억제(`*:*App/motor/*`)로 돌아가지 말 것.
-#
+# ---
 #   11.4 (포인터 <-> 정수 변환, Advisory)
 #     원인: ST HAL 의 페리페럴 베이스가 `#define GPIOB ((GPIO_TypeDef*)GPIOB_BASE)`
 #           형태라, GPIO/TIM/I2C 를 쓰는 모든 코드에서 구조적으로 발생한다.
@@ -49,14 +49,14 @@ misra-c2012-20.1:*shared/protocol.h
 #           계층이므로 deviation 으로 수용한다. (MISRA Compliance:2020 의
 #           adopted code / 하드웨어 접근 예외에 해당)
 misra-c2012-11.4:*App/*
-#
+# ---
 #   8.7 (단일 TU 에서만 참조되는 외부 링키지, Advisory)
 #     원인: 모듈의 공개 API 를 cppcheck 가 "한 파일에서만 쓴다" 고 본다.
 #           호출자가 아직 없는 계층(App/scan 미착수)일수록 전부 걸린다.
 #     판단: 모듈 경계를 헤더로 노출하는 것이 이 프로젝트의 구조라 오탐이다.
 #           static 으로 바꾸면 계층 분리가 깨진다.
 misra-c2012-8.7:*App/*
-#
+# ---
 #   21.6 (표준 I/O 함수 금지, Required) — 파일 1개 한정 deviation
 #     대상: App/hallEffectSensor/encoder_bench.c
 #     원인: 이 파일은 엔코더 벤치 브링업 도구다. 사람이 VCP 로 값을 읽는 것이
@@ -66,7 +66,7 @@ misra-c2012-8.7:*App/*
 #           멈추지 않도록 파일·룰 한정으로 억제한다(폴더 통째 억제 아님).
 #           기구 브링업이 끝나면 이 파일과 함께 이 줄도 지운다.
 misra-c2012-21.6:*App/hallEffectSensor/encoder_bench.c
-#
+# ---
 #   2.5 (미사용 매크로, Advisory) — 같은 파일 한정
 #     원인: ENCODER_BENCH_TEST 로 켜고 끄는 파일이라, cppcheck 가 두 구성을
 #           모두 훑으면 한쪽 구성에서는 매크로가 반드시 미사용으로 남는다.
