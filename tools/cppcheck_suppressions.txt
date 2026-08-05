@@ -73,3 +73,19 @@ misra-c2012-21.6:*App/hallEffectSensor/encoder_bench.c
 #           shared/protocol.h 를 2.5 에서 뺀 것과 같은 성격이다.
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.c
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.h
+
+# --- 7. cppcheck 2.13.0 오탐 (2026-08-05) ---
+#   ※ 구분선에 '#' 단독 줄을 쓰지 말 것. 2.13 파서는 길이 2 이상일 때만 주석으로
+#     보므로 '#' 한 글자는 규칙으로 파싱돼 "Failed to add suppression. No id" 가 된다.
+# ---
+#   11.8 (pointed-to 자격 제거, Required) — motor.c 한정, 오탐 억제
+#     대상: HAL_GPIO_WritePin 호출 8곳 (74/82/84/96/98, 211/219/221)
+#     근거: s_cfg 가 static const 라 멤버 lvalue 는 GPIO_TypeDef *const 지만,
+#           값을 읽으면 top-level const 는 사라져 GPIO_TypeDef * 가 된다.
+#           HAL 파라미터도 GPIO_TypeDef * — 가리키는 타입은 양쪽 다 무자격이라
+#           제거되는 자격이 없다. 11.8 은 pointed-to 자격만 다루는 룰이다.
+#     확인: CI 2.13.0 은 8건 지적, cppcheck 2.21 은 0건(11.8 검사 자체는 활성 —
+#           진짜 위반인 (char*)cp 는 잡는다). 버전만 다른데 결과가 갈린다.
+#     해제: CI cppcheck 가 2.14 이상이 되면 이 줄을 지운다.
+#           (noble apt 는 2.13.0 뿐 — 버전 고정 방식은 별도 과제)
+misra-c2012-11.8:*App/motor/motor.c
