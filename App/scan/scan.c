@@ -35,6 +35,16 @@ static struct {
     /* 라이다 각도 래치 */
     volatile int16_t latch_pan_ddeg;
     volatile int16_t latch_tilt_ddeg;
+
+#if SCAN_STEP_AND_SHOOT
+    /* step-and-shoot 진행 상태 */
+    uint32_t pt;             /* 이번 줄에서 몇 번째 점인가 (0..n_points-1) */
+    uint32_t n_points;       /* 한 줄의 점 개수                            */
+    uint32_t t0_ms;          /* 정착/캡처 대기 시작 시각                   */
+    volatile bool capture_armed;  /* true 면 다음 유효 프레임 하나를 취한다
+                                   * ISR(scan_submit_sample)이 내리므로 volatile */
+    uint32_t capture_timeout;     /* 프레임을 못 받아 넘어간 점 수 (진단)  */
+#endif
 } s;
 
 /* ---------------------------------------------------------------------------
@@ -58,6 +68,58 @@ static int32_t scan_pan_target_pulse(uint32_t line)
                        + ((int32_t)line * (int32_t)s.step_ddeg);
     return motor_ddeg_to_pulse(ddeg);
 }
+
+#if SCAN_STEP_AND_SHOOT
+static int32_t scan_abs32(int32_t v);   /* 아래에 정의 — 순서상 전방 선언 */
+
+/* step-and-shoot: 이번 줄 pt 번째 점의 틸트 각도(ddeg).
+ *
+ * ⚠️ 반드시 **절대각에서** 계산한다. 팬과 같은 이유다(§17-7) — 스텝을 펄스로
+ *   굳혀 더해가면 0.1125도 나머지가 누적된다. 0.9도는 정확히 8펄스라 절삭이
+ *   없지만, 다른 스텝값이 들어와도 안전하도록 같은 규칙을 지킨다. */
+static int32_t scan_tilt_point_ddeg(uint32_t pt)
+{
+    const int32_t from = s.tilt_to_end ? (int32_t)s.tilt_start_ddeg
+                                       : (int32_t)s.tilt_end_ddeg;
+    const int32_t dir  = s.tilt_to_end ? 1 : -1;
+
+    return from + (dir * (int32_t)pt * (int32_t)s.step_ddeg);
+}
+
+/* 이번 줄의 점 개수. 양 끝을 모두 포함한다.
+ * ⚠️ 스팬이 스텝으로 딱 안 나눠지면 마지막 조각은 버린다 — 예로 +-70도를
+ *   0.9도로 나누면 155.6 이라 156점이고 끝이 +69.5도가 된다. 범위를 넘어서는
+ *   점을 억지로 만들면 기구 한계를 칠 수 있어 안전 쪽으로 자른다. */
+static uint32_t scan_line_points(void)
+{
+    const int32_t span = scan_abs32((int32_t)s.tilt_end_ddeg
+                                  - (int32_t)s.tilt_start_ddeg);
+    return (s.step_ddeg > 0u)
+             ? ((uint32_t)(span / (int32_t)s.step_ddeg) + 1u)
+             : 1u;
+}
+
+/* 다음 점으로. 줄을 다 찍었으면 줄 끝 처리로 넘어간다. */
+static void scan_step_next(void);
+
+/* pt 번째 점으로 이동 명령을 내고 SC_STEP_MOVE 로 들어간다. */
+static void scan_step_goto(uint32_t pt)
+{
+    motor_set_target(MOTOR_AXIS_TILT,
+                     motor_ddeg_to_pulse(scan_tilt_point_ddeg(pt)));
+    s.state = SC_STEP_MOVE;
+}
+
+static void scan_step_next(void)
+{
+    s.pt++;
+    if (s.pt >= s.n_points) {
+        s.state = SC_LINE_END;
+    } else {
+        scan_step_goto(s.pt);
+    }
+}
+#endif /* SCAN_STEP_AND_SHOOT */
 
 /* 이번 줄 틸트 목표(펄스). serpentine 이라 줄마다 방향이 뒤집힌다. */
 static int32_t scan_tilt_target_pulse(void)
@@ -325,8 +387,14 @@ void scan_process(void)
     case SC_MOVE_START:
         if (motor_is_idle(MOTOR_AXIS_PAN) && motor_is_idle(MOTOR_AXIS_TILT)) {
             s.tilt_to_end = true;
+#if SCAN_STEP_AND_SHOOT
+            s.n_points = scan_line_points();
+            s.pt       = 0u;
+            scan_step_goto(0u);
+#else
             motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
             s.state = SC_SWEEP;
+#endif
         }
         break;
 
@@ -335,6 +403,40 @@ void scan_process(void)
             s.state = SC_LINE_END;
         }
         break;
+
+#if SCAN_STEP_AND_SHOOT
+    /* --- step-and-shoot: 이동 → 정착 → 캡처 를 점마다 반복 --------------- */
+    case SC_STEP_MOVE:
+        if (motor_is_idle(MOTOR_AXIS_TILT)) {
+            s.t0_ms = HAL_GetTick();
+            s.state = SC_STEP_SETTLE;
+        }
+        break;
+
+    case SC_STEP_SETTLE:
+        /* 부호 없는 뺄셈이라 tick 랩어라운드에도 경과시간이 옳게 나온다. */
+        if ((HAL_GetTick() - s.t0_ms) >= SCAN_SETTLE_MS) {
+            s.capture_armed = true;     /* 다음 유효 프레임 하나를 취한다 */
+            s.t0_ms         = HAL_GetTick();
+            s.state         = SC_STEP_CAPTURE;
+        }
+        break;
+
+    case SC_STEP_CAPTURE:
+        if (!s.capture_armed) {
+            /* 캡처 완료(scan_submit_sample 이 내렸다) → 다음 점 */
+            scan_step_next();
+        } else if ((HAL_GetTick() - s.t0_ms) >= SCAN_CAPTURE_TIMEOUT_MS) {
+            /* 라이다가 죽어도 한 점에서 영영 멈추지 않는다. 그 점은 비우고
+             * 진행하되 횟수를 세어 두면 나중에 산출물에서 원인을 알 수 있다. */
+            s.capture_armed = false;
+            s.capture_timeout++;
+            scan_step_next();
+        } else {
+            /* 대기 */
+        }
+        break;
+#endif /* SCAN_STEP_AND_SHOOT */
 
     case SC_LINE_END:
         scan_do_line_end();
@@ -376,10 +478,24 @@ void scan_submit_sample(int16_t pan_ddeg, int16_t tilt_ddeg,
                         uint32_t device_time_ms,
                         uint8_t dis_status, uint8_t range_precision)
 {
+#if SCAN_STEP_AND_SHOOT
+    /* 정착이 끝나 무장된 상태에서 **딱 한 프레임만** 취한다. 나머지는 버린다
+     * — 라이다는 액티브 출력이라 계속 오지만, 이동 중이나 정착 중에 온 것은
+     *   각도가 확정되지 않아 쓸 수 없다. 버리는 비용은 0 이다(어차피 온다).
+     *
+     * ⚠️ 무장 해제를 여기서 하는 이유: 이 함수가 메인루프(lidar_process)에서
+     *   불리므로 상태머신과 같은 컨텍스트다. 따라서 별도 락이 필요 없다. */
+    if ((s.state == SC_STEP_CAPTURE) && s.capture_armed) {
+        s.capture_armed = false;
+        uart_rpi_send_scan_point(pan_ddeg, tilt_ddeg, d_mm, signal_strength,
+                                 device_time_ms, dis_status, range_precision);
+    }
+#else
     /* 스윕 구간의 점만 올린다. 줄 끝 정지·팬 이동 중의 점은 격자에 넣을
      * 각도가 아니다(같은 각도에 몰려 중복만 만든다). */
     if (s.state == SC_SWEEP) {
         uart_rpi_send_scan_point(pan_ddeg, tilt_ddeg, d_mm, signal_strength,
                                  device_time_ms, dis_status, range_precision);
     }
+#endif
 }
