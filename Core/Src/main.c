@@ -146,9 +146,9 @@ int main(void)
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
     lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
-    motor_bench_run();                     // 모터 왕복 테스트 (기본 꺼짐)
-    lidar_bench_run();                     // 라이다 수신 테스트 (기본 꺼짐)
-    encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
+    //motor_bench_run();                     // 모터 왕복 테스트 (기본 꺼짐)
+    //lidar_bench_run();                     // 라이다 수신 테스트 (기본 꺼짐)
+    //encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
 
@@ -515,7 +515,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|TILT_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -530,8 +530,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PAN_EN_Pin PAN_STEP_Pin PAN_DIR_Pin TILT_EN_Pin */
-  GPIO_InitStruct.Pin = PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin;
+  /*Configure GPIO pins : PAN_EN_Pin TILT_EN_Pin PAN_STEP_Pin PAN_DIR_Pin */
+  GPIO_InitStruct.Pin = PAN_EN_Pin|TILT_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

@@ -35,7 +35,7 @@
  *              1 = 두 축을 왕복시키며 pulse/target/EN 을 VCP 로 출력
  * ========================================================================= */
 #ifndef MOTOR_BENCH_TEST       /* -DMOTOR_BENCH_TEST=1 로도 켤 수 있다 */
-#define MOTOR_BENCH_TEST   1   /* ★ 여기 ★ */
+#define MOTOR_BENCH_TEST   0   /* ★ 여기 ★ */
 #endif
 
 #if MOTOR_BENCH_TEST
