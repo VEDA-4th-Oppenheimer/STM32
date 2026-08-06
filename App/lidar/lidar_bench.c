@@ -58,7 +58,7 @@ void lidar_bench_run(void)
         static uint32_t s_prev_csum   = 0u;
         static uint32_t s_prev_drops  = 0u;
 
-        const uint32_t bytes  = lidar_get_byte_count();
+        const uint32_t bytes  = lidar_get_rx_bytes();
         const uint32_t frames = lidar_get_frame_count();
         const uint32_t csum   = lidar_get_csum_errors();
         const uint32_t drops  = lidar_get_queue_drops();

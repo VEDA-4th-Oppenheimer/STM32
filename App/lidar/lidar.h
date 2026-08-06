@@ -54,12 +54,17 @@ uint32_t lidar_get_frame_count(void);   /* 체크섬 통과 프레임 수      *
 uint32_t lidar_get_csum_errors(void);   /* 체크섬 불일치 수           */
 uint32_t lidar_get_queue_drops(void);   /* 큐가 차서 버린 샘플 수     */
 
-/* 수신한 원시 바이트 수.
- * ⚠️ 이게 있어야 "선이 안 붙음" 과 "보레이트가 틀림" 이 갈린다 — 둘 다
- *   frames=0 / csum_err=0 으로 똑같이 보이기 때문이다.
- *     bytes=0            -> 물리 배선(TX/RX, GND, 전원)
- *     bytes>0, frames=0  -> 헤더 불일치(보레이트·기종·프로토콜 모드) */
-uint32_t lidar_get_byte_count(void);
+/* rx=0 이면 위 카운터 이전 단계(배선/전원/USART6 설정)에서 바이트가 아예
+ * 안 들어온다는 뜻 — frame_count/csum_errors 만으로는 구분이 안 된다.
+ *   bytes=0            -> 물리 배선(TX/RX, GND, 전원)
+ *   bytes>0, frames=0  -> 헤더 불일치(보레이트·기종·프로토콜 모드) */
+uint32_t lidar_get_rx_bytes(void);      /* USART6 로 들어온 총 바이트 */
+
+/* UART 수신 재무장(HAL_UART_Receive_IT) 상태 진단.
+ *   rearm_rc : 마지막 재무장 반환값 (0=OK, 2=BUSY → 수신 미기동)
+ *   rx_state : HAL RxState (0x62=BUSY_RX 가 정상 수신대기, 0x22=READY 면 미대기)
+ *   err_code : ErrorCode (0=정상, 8=ORE 오버런 등) */
+void lidar_get_uart_diag(uint8_t *rearm_rc, uint32_t *rx_state, uint32_t *err_code);
 
 /* 마지막으로 체크섬을 통과한 프레임의 원본 필드. 진단용(브링업 도구가 쓴다).
  * 프레임이 한 번도 안 왔으면 false. */

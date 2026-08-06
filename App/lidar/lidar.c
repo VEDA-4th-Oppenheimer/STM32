@@ -41,12 +41,11 @@ static volatile uint8_t   g_q_tail = 0U;   /* 메인루프 증가 */
 static volatile uint32_t g_frames     = 0U;
 static volatile uint32_t g_csum_err   = 0U;
 static volatile uint32_t g_queue_drop = 0U;
-
-/* ⚠️ 바이트 카운터가 없으면 "선이 안 붙음" 과 "보레이트가 틀림" 이 구분되지
- *   않는다 — 둘 다 frames=0, csum_err=0 으로 똑같이 보이기 때문이다.
- *   바이트는 들어오는데 프레임이 0 이면 헤더가 안 맞는 것(보레이트/기종),
- *   바이트조차 0 이면 물리 배선이다. */
-static volatile uint32_t g_bytes      = 0U;
+static volatile uint32_t g_rx_bytes   = 0U;   /* 파싱 이전 원시 수신 바이트 */
+/* 마지막 HAL_UART_Receive_IT 재무장 결과. 0xFF = 아직 호출 전.
+ * HAL_BUSY/HAL_ERROR 가 한 번 나면 이후 수신이 영영 안 되므로 rx=0 의
+ * 유력한 원인 중 하나다 — lidar_get_uart_diag() 로 확인. */
+static volatile uint8_t  g_last_rearm_rc = 0xFFU;
 
 /* 마지막으로 체크섬을 통과한 프레임. 진단 출력용 스냅샷이라 원자성까지는
  * 필요 없다(사람이 읽는 값이고, 찢어져도 다음 갱신에 바로잡힌다). */
@@ -81,7 +80,18 @@ uint16_t lidar_get_distance_mm(void)
 uint32_t lidar_get_frame_count(void) { return g_frames; }
 uint32_t lidar_get_csum_errors(void) { return g_csum_err; }
 uint32_t lidar_get_queue_drops(void) { return g_queue_drop; }
-uint32_t lidar_get_byte_count(void)   { return g_bytes; }
+uint32_t lidar_get_rx_bytes(void)    { return g_rx_bytes; }
+
+void lidar_get_uart_diag(uint8_t *rearm_rc, uint32_t *rx_state, uint32_t *err_code)
+{
+    if (rearm_rc != NULL) { *rearm_rc = g_last_rearm_rc; }
+    if (rx_state != NULL) {
+        *rx_state = (g_huart != NULL) ? (uint32_t)g_huart->RxState : 0xFFFFFFFFU;
+    }
+    if (err_code != NULL) {
+        *err_code = (g_huart != NULL) ? g_huart->ErrorCode : 0xFFFFFFFFU;
+    }
+}
 
 bool lidar_get_last_frame(lidar_frame_t *out)
 {
@@ -111,9 +121,7 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
         if (huart->Instance == g_huart->Instance)
         {
             static uint8_t g_buf[LIDAR_PACKET_SIZE];
-
-            g_bytes++;   /* 상태머신 이전에 센다 — 헤더가 안 맞아도 잡히도록 */
-
+            g_rx_bytes++;                       /* 진단: 수신 바이트 카운트 */
             const lidar_rx_state_t state = (g_idx == 0U) ? STATE_WAIT_HEADER
                                           : ((g_idx == 1U) ? STATE_WAIT_FUNC_MARK
                                           : STATE_COLLECT_BODY);
@@ -257,6 +265,6 @@ static void lidar_rearm_it(void)
 {
     if (g_huart != NULL)
     {
-        (void)HAL_UART_Receive_IT(g_huart, &g_rx_byte, 1U);
+        g_last_rearm_rc = (uint8_t)HAL_UART_Receive_IT(g_huart, &g_rx_byte, 1U);
     }
 }
