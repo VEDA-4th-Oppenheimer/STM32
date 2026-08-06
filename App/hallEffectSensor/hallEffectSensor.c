@@ -25,13 +25,35 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
      *   경우에도 통과해 encoder_data->raw_angle 에서 NULL 역참조로 죽는다.
      *   가드가 정반대로 동작하고 있었다. 두 인자가 **모두** 유효해야 한다. */
     if ((hi2c != NULL) && (encoder_data != NULL)) {
-        uint8_t rx_buf[2] = {0};
+        uint8_t rx_buf[2]  = {0};
+        uint8_t reg_addr   = (uint8_t)REG_ANGLE_14B;
 
         /* 0x03 레지스터부터 2바이트.
          * 핸들은 축에 따라 다르다 — Pan=I2C3(PA8/PC9), Tilt=I2C1(PB8/PB9).
          * (원 주석은 "I2C1: PA8/PC9" 로 둘을 뒤섞어 적고 있었다) */
-        status = HAL_I2C_Mem_Read(hi2c, MT6701_ADDR, REG_ANGLE_14B,
-                                  I2C_MEMADD_SIZE_8BIT, rx_buf, 2u, I2C_TIMEOUT);
+        /* ⚠️ 원래는 HAL_I2C_Mem_Read 였다. 그건 레지스터 주소를 쓴 뒤
+         *   **repeated start** 로 읽기로 전환하는데, 실기에서 그 repeated
+         *   start 가 400kHz 마진을 못 버티고 NACK(err=0x04) 났다. 벤치의
+         *   방식 탐색 결과가 근거다(2026-08-05):
+         *
+         *     A Mem_Read(400k)      실패 NACK
+         *     B Transmit+Receive    OK  raw=3531
+         *     C Receive만           "OK" 지만 raw=0  <- 포인터 없이 읽어 무의미
+         *     D Mem_Read(100k)      OK  raw=3531
+         *
+         *   B 와 D 가 같은 값을 냈다 = 3531 이 진짜 각도. 원인은 방식이
+         *   아니라 400kHz 에서의 repeated start 타이밍 마진 부족이고,
+         *   B(중간에 STOP) 와 D(속도 하향) 둘 다 회피책이다. 둘 다 적용해
+         *   마진을 최대로 둔다 — 엔코더는 홈 확립에 쓰이고 홈이 틀리면
+         *   좌표계 전체가 틀어지므로 "겨우 되는" 상태로 두면 안 된다.
+         *
+         *   ⚠️ 순서 의존: Transmit 이 성공해야만 Receive 가 의미 있다. */
+        status = HAL_I2C_Master_Transmit(hi2c, MT6701_ADDR, &reg_addr, 1u,
+                                         I2C_TIMEOUT);
+        if (status == HAL_OK) {
+            status = HAL_I2C_Master_Receive(hi2c, MT6701_ADDR, rx_buf, 2u,
+                                            I2C_TIMEOUT);
+        }
 
         if (status == HAL_OK) {
             const uint16_t raw =

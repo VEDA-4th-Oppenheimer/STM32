@@ -73,3 +73,16 @@ misra-c2012-21.6:*App/hallEffectSensor/encoder_bench.c
 #           shared/protocol.h 를 2.5 에서 뺀 것과 같은 성격이다.
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.c
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.h
+#
+# --- App/motor/motor_bench.{c,h}, App/lidar/lidar_bench.{c,h}, App/bench_common.h
+#   encoder_bench 와 동일한 성격의 브링업 전용 도구. 각 TEST 플래그로 켜고 끄며
+#   꺼진 구성에서는 매크로가 미사용으로 남고, printf 는 사람이 읽는 것이 목적이다.
+#   플래그가 0 이면 파일이 통째로 컴파일아웃되어 릴리즈엔 안 남는다.
+#   폴더 통째가 아니라 **파일·룰 한정** — motor.c / lidar.c 는 계속 검사한다.
+misra-c2012-21.6:*App/motor/motor_bench.c
+misra-c2012-2.5:*App/motor/motor_bench.c
+misra-c2012-2.5:*App/motor/motor_bench.h
+misra-c2012-21.6:*App/lidar/lidar_bench.c
+misra-c2012-2.5:*App/lidar/lidar_bench.c
+misra-c2012-2.5:*App/lidar/lidar_bench.h
+misra-c2012-2.5:*App/bench_common.h

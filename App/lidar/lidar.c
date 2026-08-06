@@ -42,6 +42,17 @@ static volatile uint32_t g_frames     = 0U;
 static volatile uint32_t g_csum_err   = 0U;
 static volatile uint32_t g_queue_drop = 0U;
 
+/* ⚠️ 바이트 카운터가 없으면 "선이 안 붙음" 과 "보레이트가 틀림" 이 구분되지
+ *   않는다 — 둘 다 frames=0, csum_err=0 으로 똑같이 보이기 때문이다.
+ *   바이트는 들어오는데 프레임이 0 이면 헤더가 안 맞는 것(보레이트/기종),
+ *   바이트조차 0 이면 물리 배선이다. */
+static volatile uint32_t g_bytes      = 0U;
+
+/* 마지막으로 체크섬을 통과한 프레임. 진단 출력용 스냅샷이라 원자성까지는
+ * 필요 없다(사람이 읽는 값이고, 찢어져도 다음 갱신에 바로잡힌다). */
+static volatile lidar_frame_t g_last_frame;
+static volatile bool          g_have_frame = false;
+
 /* ===== 내부 함수 선언 ===== */
 static void lidar_reset_rx(void);
 static void lidar_rearm_it(void);
@@ -70,6 +81,24 @@ uint16_t lidar_get_distance_mm(void)
 uint32_t lidar_get_frame_count(void) { return g_frames; }
 uint32_t lidar_get_csum_errors(void) { return g_csum_err; }
 uint32_t lidar_get_queue_drops(void) { return g_queue_drop; }
+uint32_t lidar_get_byte_count(void)   { return g_bytes; }
+
+bool lidar_get_last_frame(lidar_frame_t *out)
+{
+    bool ok = false;
+
+    if ((out != NULL) && g_have_frame) {
+        /* volatile 구조체를 통째로 대입하면 컴파일러마다 경고가 갈려 필드별로
+         * 옮긴다. 찢어져도 진단용이라 다음 갱신에 바로잡힌다. */
+        out->device_time_ms  = g_last_frame.device_time_ms;
+        out->d_mm            = g_last_frame.d_mm;
+        out->signal_strength = g_last_frame.signal_strength;
+        out->dis_status      = g_last_frame.dis_status;
+        out->range_precision = g_last_frame.range_precision;
+        ok = true;
+    }
+    return ok;
+}
 
 /* ---------------------------------------------------------------------------
  *  UART 수신 콜백 (1바이트마다) — ISR 컨텍스트
@@ -82,6 +111,9 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
         if (huart->Instance == g_huart->Instance)
         {
             static uint8_t g_buf[LIDAR_PACKET_SIZE];
+
+            g_bytes++;   /* 상태머신 이전에 센다 — 헤더가 안 맞아도 잡히도록 */
+
             const lidar_rx_state_t state = (g_idx == 0U) ? STATE_WAIT_HEADER
                                           : ((g_idx == 1U) ? STATE_WAIT_FUNC_MARK
                                           : STATE_COLLECT_BODY);
@@ -119,6 +151,14 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
                         {
                             g_frames++;
                             g_raw_dist_mm = (uint16_t)f.d_mm;
+
+                            /* 진단용 스냅샷 (lidar_bench 가 읽는다) */
+                            g_last_frame.device_time_ms  = f.device_time_ms;
+                            g_last_frame.d_mm            = f.d_mm;
+                            g_last_frame.signal_strength = f.signal_strength;
+                            g_last_frame.dis_status      = f.dis_status;
+                            g_last_frame.range_precision = f.range_precision;
+                            g_have_frame = true;
                             /* ★ 각도를 여기서 잡는다. 이 시점이 프레임이
                              *   완성된 순간이라 거리와 시간축이 맞는다. */
                             lidar_push_sample(&f);

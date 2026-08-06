@@ -144,7 +144,10 @@ void motor_sync_pulse(motor_axis_t ax, int32_t pulse)
 /* ---------------------------------------------------------------------------
  *  엔코더 (블로킹 — 메인루프 전용)
  * ------------------------------------------------------------------------- */
-static I2C_HandleTypeDef *axis_i2c(motor_axis_t ax)
+/* 축 → I2C 핸들. 공개해 두는 이유는 버스 진단(App/hallEffectSensor 의 벤치)이
+ * 판독이 아니라 버스 자체(주소 스캔·물림 복구)를 다뤄야 해서다. 여기서만
+ * 핸들을 알게 해 두면 extern 선언이 파일마다 흩어지지 않는다(MISRA 8.5). */
+I2C_HandleTypeDef *motor_axis_i2c(motor_axis_t ax)
 {
     return (ax == MOTOR_AXIS_PAN) ? &hi2c3 : &hi2c1;
 }
@@ -154,7 +157,7 @@ HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out)
     HAL_StatusTypeDef st = HAL_ERROR;
 
     if ((ax < MOTOR_AXIS_COUNT) && (out != NULL)) {
-        st = Encoder_Read(axis_i2c(ax), out);
+        st = Encoder_Read(motor_axis_i2c(ax), out);
     }
     return st;
 }

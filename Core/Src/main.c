@@ -15,7 +15,9 @@
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 
 #include "hallEffectSensor.h"   /* MT6701 자기 엔코더 (강유근) */
-#include "encoder_bench.h"      /* 엔코더 벤치 판독 (브링업 전용, 기본 껼짐) */
+#include "encoder_bench.h"
+#include "motor_bench.h"      /* 모터 왕복 테스트 (브링업 전용, 기본 꺼짐) */
+#include "lidar_bench.h"      /* 라이다 수신 테스트 (브링업 전용, 기본 꺼짐) */      /* 엔코더 벤치 판독 (브링업 전용, 기본 껼짐) */
 #include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
 #include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
 #include "lidar.h"              /* TOFSense-F2P 수신 (USART6, 송영빈)       */
@@ -144,6 +146,8 @@ int main(void)
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
     lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
+    motor_bench_run();                     // 모터 왕복 테스트 (기본 꺼짐)
+    lidar_bench_run();                     // 라이다 수신 테스트 (기본 꺼짐)
     encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
@@ -219,7 +223,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.ClockSpeed = 100000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -253,7 +257,7 @@ static void MX_I2C3_Init(void)
 
   /* USER CODE END I2C3_Init 1 */
   hi2c3.Instance = I2C3;
-  hi2c3.Init.ClockSpeed = 400000;
+  hi2c3.Init.ClockSpeed = 100000;
   hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c3.Init.OwnAddress1 = 0;
   hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;

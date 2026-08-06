@@ -51,8 +51,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/uart_rpi/uart_rpi.c
     App/motor/motor.c
+    App/motor/motor_bench.c
     App/scan/scan.c
     App/lidar/lidar.c
+    App/lidar/lidar_bench.c
     App/lidar/lidar_parser.c
     App/hallEffectSensor/hallEffectSensor.c
     App/hallEffectSensor/encoder_bench.c
@@ -61,6 +63,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+    ${CMAKE_SOURCE_DIR}/App
     ${CMAKE_SOURCE_DIR}/App/uart_rpi
     ${CMAKE_SOURCE_DIR}/App/motor
     ${CMAKE_SOURCE_DIR}/App/scan

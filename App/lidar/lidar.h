@@ -25,7 +25,9 @@
 #define LIDAR_H
 
 #include "stm32f4xx_hal.h"
+#include "lidar_parser.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 /* 샘플 링버퍼 깊이.
  * 라이다가 100Hz(10ms/프레임)이고 메인루프는 프레임 상행(115200 에서 23바이트
@@ -51,5 +53,16 @@ uint16_t lidar_get_distance_mm(void);
 uint32_t lidar_get_frame_count(void);   /* 체크섬 통과 프레임 수      */
 uint32_t lidar_get_csum_errors(void);   /* 체크섬 불일치 수           */
 uint32_t lidar_get_queue_drops(void);   /* 큐가 차서 버린 샘플 수     */
+
+/* 수신한 원시 바이트 수.
+ * ⚠️ 이게 있어야 "선이 안 붙음" 과 "보레이트가 틀림" 이 갈린다 — 둘 다
+ *   frames=0 / csum_err=0 으로 똑같이 보이기 때문이다.
+ *     bytes=0            -> 물리 배선(TX/RX, GND, 전원)
+ *     bytes>0, frames=0  -> 헤더 불일치(보레이트·기종·프로토콜 모드) */
+uint32_t lidar_get_byte_count(void);
+
+/* 마지막으로 체크섬을 통과한 프레임의 원본 필드. 진단용(브링업 도구가 쓴다).
+ * 프레임이 한 번도 안 왔으면 false. */
+bool lidar_get_last_frame(lidar_frame_t *out);
 
 #endif /* LIDAR_H */

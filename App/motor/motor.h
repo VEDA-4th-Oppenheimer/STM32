@@ -118,6 +118,12 @@ int16_t motor_get_ddeg(motor_axis_t ax);
 /* --- 엔코더 (블로킹 — 메인루프 전용, ISR 에서 호출 금지) ------------------*/
 HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out);
 
+/* 축에 물린 I2C 핸들 (Pan=&hi2c3 / Tilt=&hi2c1).
+ * 판독은 motor_read_encoder 를 쓰고, 이건 **버스 자체**를 다뤄야 할 때만
+ * 쓴다(주소 스캔, SDA 물림 9클럭 복구 등 브링업 진단). 핸들 extern 이 파일
+ * 곳곳에 흩어지는 걸 막으려고 여기 한 곳에서만 노출한다. */
+I2C_HandleTypeDef *motor_axis_i2c(motor_axis_t ax);
+
 /* 엔코더 실측각(도) → 펄스. 영점 상수를 적용한다. */
 int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg);
 
