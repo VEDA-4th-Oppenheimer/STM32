@@ -34,6 +34,7 @@ enable_language(C ASM)
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
         shared/protocol.h
+        App/bench_common.h
 
 )
 

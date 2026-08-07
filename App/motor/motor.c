@@ -164,8 +164,22 @@ HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out)
 
 int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
 {
-    const float rel = deg - ((ax < MOTOR_AXIS_COUNT)
-                             ? s_cfg[ax].zero_offset_deg : 0.0f);
+    float rel = deg - ((ax < MOTOR_AXIS_COUNT)
+                       ? s_cfg[ax].zero_offset_deg : 0.0f);
+
+    /* ⚠️ 엔코더는 0~360 순환이라 뺄셈만 하면 한 바퀴 경계에서 터진다.
+     *   예) 틸트 영점이 313.5도일 때 기구각 +90도의 실측은 403.5 가 아니라
+     *       43.5 로 읽힌다. 그대로 빼면 -270 이 나와 ERR_STALL 이나 엉뚱한
+     *       재영점으로 이어진다. -180..+180 으로 접어 가장 가까운 해를 쓴다.
+     *   양축 가동범위가 180도 이내라 이 접기로 모호함이 없다. */
+    if (rel > 180.0f) {
+        rel -= 360.0f;
+    } else if (rel < -180.0f) {
+        rel += 360.0f;
+    } else {
+        /* 범위 안 */
+    }
+
     return (int32_t)(rel / MOTOR_DEG_PER_PULSE);
 }
 
