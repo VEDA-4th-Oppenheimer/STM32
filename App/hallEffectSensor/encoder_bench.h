@@ -31,7 +31,7 @@
  *              1 = 엔코더 판독을 100ms 마다 VCP 로 출력
  * ========================================================================= */
 #ifndef ENCODER_BENCH_TEST      /* -DENCODER_BENCH_TEST=1 로도 켤 수 있다 */
-#define ENCODER_BENCH_TEST   1  /* ★ 여기 ★ */
+#define ENCODER_BENCH_TEST   0  /* ★ 여기 ★ */
 #endif
 
 #if ENCODER_BENCH_TEST
