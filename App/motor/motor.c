@@ -26,6 +26,18 @@ struct axis_cfg {
     GPIO_TypeDef *dir_port;   uint16_t dir_pin;
     GPIO_TypeDef *en_port;    uint16_t en_pin;
     GPIO_PinState dir_forward;
+    /* ★ 엔코더 방향. "펄스 카운트가 증가할 때 엔코더 각도가 증가하면 +1,
+     *   감소하면 -1" 이다.
+     *
+     *   ⚠️ dir_forward 와 **반드시 짝으로** 다뤄야 한다. dir_forward 를
+     *     뒤집으면 "카운트 증가" 가 반대 물리 방향을 뜻하게 되는데, 엔코더는
+     *     그대로이므로 이 부호도 같이 뒤집어야 한다. 하나만 바꾸면
+     *     motor_encoder_deg_to_pulse() 가 반대 부호를 내놓고, 홈 폐루프가
+     *     보정할수록 멀어져 ERR_STALL 로 끝난다.
+     *
+     *   실측법: ENCODER_BENCH_TEST=1 로 두고 축을 손으로 "카운트가 증가하는
+     *     물리 방향" 으로 돌려 raw 가 늘면 +1, 줄면 -1. */
+    int8_t        enc_sign;
     float         zero_offset_deg;
 };
 
@@ -34,7 +46,11 @@ static const struct axis_cfg s_cfg[MOTOR_AXIS_COUNT] = {
         .step_port = PAN_STEP_GPIO_Port, .step_pin = PAN_STEP_Pin,
         .dir_port  = PAN_DIR_GPIO_Port,  .dir_pin  = PAN_DIR_Pin,
         .en_port   = PAN_EN_GPIO_Port,   .en_pin   = PAN_EN_Pin,
-        .dir_forward = GPIO_PIN_RESET,
+        /* ⚠️ 2026-08-10 반전. 배선 정리 후 케이블 여유가 **반대 방향**으로
+         *   잡혀서, 종전 방향으로 돌리면 선이 당겨져 뽑힌다.
+         *   dir_forward 를 뒤집었으므로 enc_sign 도 같이 뒤집는다(위 주석). */
+        .dir_forward = GPIO_PIN_SET,
+        .enc_sign    = -1,
         .zero_offset_deg = MOTOR_PAN_ZERO_OFFSET_DEG,
     },
     [MOTOR_AXIS_TILT] = {
@@ -42,6 +58,7 @@ static const struct axis_cfg s_cfg[MOTOR_AXIS_COUNT] = {
         .dir_port  = TILT_DIR_GPIO_Port,  .dir_pin  = TILT_DIR_Pin,
         .en_port   = TILT_EN_GPIO_Port,   .en_pin   = TILT_EN_Pin,
         .dir_forward = GPIO_PIN_SET,
+        .enc_sign    = +1,   /* 영점 실측(MOTOR_TILT_ZERO_OFFSET_DEG)이 이 부호로 검증됨 */
         .zero_offset_deg = MOTOR_TILT_ZERO_OFFSET_DEG,
     },
 };
@@ -164,6 +181,7 @@ HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out)
 
 int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
 {
+    const int8_t sign = (ax < MOTOR_AXIS_COUNT) ? s_cfg[ax].enc_sign : (int8_t)1;
     float rel = deg - ((ax < MOTOR_AXIS_COUNT)
                        ? s_cfg[ax].zero_offset_deg : 0.0f);
 
@@ -180,7 +198,16 @@ int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
         /* 범위 안 */
     }
 
-    return (int32_t)(rel / MOTOR_DEG_PER_PULSE);
+    /* 엔코더 방향 반영 (위 enc_sign 주석 참조) */
+    rel *= (float)sign;
+
+    /* ⚠️ 버림이 아니라 반올림. (int32_t) 캐스트는 0 방향 절삭이라 최대 1펄스
+     *   (0.1125도) 오차에 **한쪽으로 치우친 편향**까지 생긴다. 반올림하면
+     *   최대 0.5펄스(0.056도)로 절반이 되고 편향도 사라진다 — 홈 정확도가
+     *   그만큼 좋아진다. ddeg<->pulse 변환은 이미 반올림을 쓰고 있었는데
+     *   (motor.h §17-7) 엔코더 변환만 빠져 있었다. */
+    const float q = rel / MOTOR_DEG_PER_PULSE;
+    return (int32_t)((q >= 0.0f) ? (q + 0.5f) : (q - 0.5f));
 }
 
 HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse)

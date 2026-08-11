@@ -66,7 +66,7 @@ typedef enum {
  *  상수가 틀려도 CMD_HOMED 가 raw 를 함께 올리므로 이미 찍은 스캔의 각도를
  *  오프라인에서 재계산할 수 있다(재스캔 불필요). */
 #define MOTOR_PAN_ZERO_OFFSET_DEG    173.61f
-#define MOTOR_TILT_ZERO_OFFSET_DEG   301.01f
+#define MOTOR_TILT_ZERO_OFFSET_DEG   312.19f
 
 /* 부팅 직후 I2C/센서가 아직 안정화되지 않아 첫 판독이 NACK 나는 경우 대비 */
 #define MOTOR_ENC_MAX_RETRY          5u
