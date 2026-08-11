@@ -125,14 +125,19 @@ static int32_t scan_encoder_error_ddeg(motor_axis_t ax, bool *ok,
     return err;
 }
 
-/* 축 하나를 대조하고, 허용 오차를 벗어났으면 **보정 이동을 건다**.
- *   반환 true  = 오차 안 (또는 판독 불가라 판정 보류)
- *        false = 보정 이동을 걸었음 → 호출자가 다시 기다렸다 재검사
+/* 축 하나를 대조하고, 필요하면 보정 이동을 건다.
+ *   반환 true  = 세부조정 목표(FINE) 안에 들었다 → 이 축은 완료
+ *        false = 아직 멀다 → 보정을 걸었으니 호출자가 다시 기다렸다 재검사
  *
- * 보정 방식은 "실측을 진실로 삼고 다시 0 을 목표로 준다" 이다. 남은 오차만큼
- * 상대 이동을 주는 것보다 안전한데, 스텝카운트가 실측과 어긋난 채로 남아 있으면
- * 이후 모든 목표가 그 오차를 안고 가기 때문이다. 여기서 카운트를 진실에
- * 맞춰 두면 그 다음부터는 절대각 계산이 다시 유효해진다. */
+ * ★ 두 경우 모두 스텝카운트를 실측에 맞춘다(motor_sync_pulse). 축이 물리적으로
+ *   0 에 정확히 서는 것보다 **카운트가 진실을 담는 것**이 중요하기 때문이다.
+ *   예전에는 허용 오차 안이면 아무것도 안 했는데, 그러면 엔코더가 "너 3.9도
+ *   지점에 있어" 라고 말하는 걸 무시하고 "여기가 0" 으로 확정해 버려서
+ *   홈 정확도가 임계값만큼 벌어졌다.
+ *
+ * 보정 방식은 "실측을 진실로 삼고 절대 목표 0 을 다시 준다" 이다. 남은 오차만큼
+ * 상대 이동을 주는 것보다 안전한데, 스텝카운트가 실측과 어긋난 채 남으면 이후
+ * 모든 절대각 계산이 그 오차를 안고 가기 때문이다. */
 static bool scan_home_axis_settled(motor_axis_t ax)
 {
     bool ok;
@@ -140,11 +145,18 @@ static bool scan_home_axis_settled(motor_axis_t ax)
     const int32_t err = scan_encoder_error_ddeg(ax, &ok, &enc_pulse);
     bool done = true;
 
-    if (ok && (scan_abs32(err) > SCAN_HOME_TOL_DDEG)) {
-        motor_sync_pulse(ax, enc_pulse);   /* 실측이 진실 */
-        motor_set_target(ax, 0);           /* 다시 0 으로 */
-        done = false;
+    if (ok) {
+        /* 실측을 카운트에 반영 — 수렴했든 아니든 항상. */
+        motor_sync_pulse(ax, enc_pulse);
+
+        if (scan_abs32(err) > SCAN_HOME_FINE_DDEG) {
+            motor_set_target(ax, 0);   /* 아직 머니 한 번 더 당긴다 */
+            done = false;
+        }
     }
+    /* 판독 실패는 done=true 로 통과시킨다. 여기서 무한 재시도하면 축당
+     * 100ms 씩 태우며 영영 안 끝난다 — 판독이 아예 안 되면 홈 자체가 이미
+     * scan_do_homing 에서 ERR_NOT_HOMED 로 걸렸을 것이다. */
     return done;
 }
 
@@ -273,12 +285,18 @@ static void scan_do_homing(void)
 #else
     Encoder_t pan_enc;
     Encoder_t tilt_enc;
-    bool      ok;
 
     /* 절대 엔코더라 구동이 필요 없다 — 읽어서 현재 위치를 확정하면 끝.
-     * (리밋스위치 방식이라면 여기서 "리밋을 찾을 때까지 회전" 이 필요했다) */
-    ok = (motor_read_encoder(MOTOR_AXIS_PAN,  &pan_enc)  == HAL_OK)
-      && (motor_read_encoder(MOTOR_AXIS_TILT, &tilt_enc) == HAL_OK);
+     * (리밋스위치 방식이라면 여기서 "리밋을 찾을 때까지 회전" 이 필요했다)
+     *
+     * ⚠️ 예전엔 두 판독을 && 로 한 줄에 묶었는데, 그러면 팬이 실패한 순간
+     *   단락되어 **틸트를 아예 읽지 않는다**. 판정에는 문제가 없지만 어느 축이
+     *   죽었는지 알 길이 없어져서, 실기에서 last_err=3 만 보고 축을 못 가렸다.
+     *   둘 다 읽어 각각 남긴다 — I2C 판독은 실패해도 10ms 라 비용도 무시할
+     *   수준이다. */
+    const bool pan_ok  = (motor_read_encoder(MOTOR_AXIS_PAN,  &pan_enc)  == HAL_OK);
+    const bool tilt_ok = (motor_read_encoder(MOTOR_AXIS_TILT, &tilt_enc) == HAL_OK);
+    const bool ok      = pan_ok && tilt_ok;
 
     if (ok) {
         const int32_t pan_pulse =
@@ -323,7 +341,21 @@ static void scan_do_homing(void)
          * 없기도 하고, 홈이 실패한 뒤의 상태가 정확히 "홈 안 된 상태" 라
          * 의미가 맞는다. 이 상태에서 SCAN_START 가 오면 같은 코드로 거절된다. */
         s.homed = false;
+#if SCAN_HOME_AXIS_PROBE
+        /* 🔧 브링업 전용. scan.h SCAN_HOME_AXIS_PROBE 주석 참조.
+         *   ⚠️ 여기서 쓰는 ERR_STALL / ERR_LIDAR 는 **본래 의미가 아니다.**
+         *     축을 가리려고 잠시 빌려 쓰는 것이고, 프로브를 끄면 전부
+         *     ERR_NOT_HOMED 로 돌아간다. 로그를 나중에 다시 볼 때 오해하지 말 것. */
+        if (!pan_ok && !tilt_ok) {
+            scan_report_err((uint8_t)ERR_NOT_HOMED);   /* 3 = 양축 실패 */
+        } else if (!pan_ok) {
+            scan_report_err((uint8_t)ERR_STALL);       /* 5 = 팬만 실패  */
+        } else {
+            scan_report_err((uint8_t)ERR_LIDAR);       /* 6 = 틸트만 실패 */
+        }
+#else
         scan_report_err((uint8_t)ERR_NOT_HOMED);
+#endif
         s.state = SC_IDLE;
     }
 #endif /* SCAN_NO_ENCODER */
@@ -349,6 +381,17 @@ static void scan_do_homing(void)
  *     즉 offset 이 90도 틀려 있어도 이 검사는 조용히 통과한다. 그걸 잡는
  *     유일한 수단은 **SCAN_HOME_SETTLE_MS 동안 사람이 자세를 보는 것**이다.
  *     틸트가 수직(nadir)으로 서 있지 않으면 offset 이 틀린 것이다. */
+/* 홈 확립 완료를 알린다. CMD_HOMED 의 payload 는 **최초 판독값**이다 —
+ * 이후 보정 이동으로 축이 조금 움직였어도, provenance 로 남겨야 하는 것은
+ * "홈을 세울 때 엔코더가 무엇을 읽었나" 이기 때문이다. */
+static void scan_home_finish(void)
+{
+    s.home_retry = 0u;
+    uart_rpi_send_frame((uint8_t)CMD_HOMED, &s.home,
+                        (uint8_t)sizeof(s.home));
+    s.state = SC_IDLE;
+}
+
 static void scan_do_home_pose(void)
 {
     /* 양축을 각각 대조한다. || 로 단락시키지 않고 둘 다 호출하는 이유는,
@@ -358,26 +401,35 @@ static void scan_do_home_pose(void)
     const bool pan_ok  = scan_home_axis_settled(MOTOR_AXIS_PAN);
 
     if (tilt_ok && pan_ok) {
-        s.home_retry = 0u;
-        uart_rpi_send_frame((uint8_t)CMD_HOMED, &s.home,
-                            (uint8_t)sizeof(s.home));
-        s.state = SC_IDLE;
+        scan_home_finish();                 /* FINE 안에 수렴 */
     } else if (s.home_retry < SCAN_HOME_MAX_RETRY) {
         /* 보정 이동이 걸려 있다. 상태를 유지하면 다음 바퀴에 !idle 로 보여
          * 정착 대기가 다시 잡히고, 멈춘 뒤 재검사로 돌아온다. */
         s.home_retry++;
     } else {
-        /* 정해진 횟수 안에 못 잡았다 = 보정으로 될 문제가 아니다.
-         * 축이 걸렸거나, DIR 극성이 뒤집혀 보정이 오히려 멀어지게 하거나,
-         * 토크가 부족해 목표에 못 간다. 계속 시도해봐야 같은 자리다.
-         *
-         * 홈을 무효로 되돌리고 알린다. 통지만 안 하면 데몬이 HOME_TIMEOUT
-         * 까지 기다리다 취소하는데, 그러면 원인이 "무응답"으로 보여 오해를
-         * 부른다. */
-        s.home_retry = 0u;
-        s.homed      = false;
-        scan_report_err((uint8_t)ERR_STALL);
-        s.state = SC_IDLE;
+        /* 재시도를 다 썼다. 여기서 갈린다 —
+         *   TOL 안 : 세부조정만 못 끝냈을 뿐 카운트는 실측에 맞춰져 있다.
+         *            물리적으로 0 에 못 선 것뿐이라 **정상 진행**한다.
+         *   TOL 밖 : 보정으로 될 문제가 아니다. DIR 극성 반전(보정할수록
+         *            멀어짐)·축 걸림·토크 부족·영점 상수 오류. */
+        bool ok_t;
+        bool ok_p;
+        int32_t dummy = 0;
+        const int32_t et = scan_encoder_error_ddeg(MOTOR_AXIS_TILT, &ok_t, &dummy);
+        const int32_t ep = scan_encoder_error_ddeg(MOTOR_AXIS_PAN,  &ok_p, &dummy);
+        const bool too_far = (ok_t && (scan_abs32(et) > SCAN_HOME_TOL_DDEG))
+                          || (ok_p && (scan_abs32(ep) > SCAN_HOME_TOL_DDEG));
+
+        if (too_far) {
+            /* 통지만 안 하면 데몬이 HOME_TIMEOUT 까지 기다리다 취소하는데,
+             * 그러면 원인이 "무응답" 으로 보여 오해를 부른다. 명시적으로 알린다. */
+            s.home_retry = 0u;
+            s.homed      = false;
+            scan_report_err((uint8_t)ERR_STALL);
+            s.state = SC_IDLE;
+        } else {
+            scan_home_finish();
+        }
     }
 }
 
@@ -453,9 +505,16 @@ void scan_process(void)
         break;
 
     case SC_HOME_POSE:
-        /* 양축이 0 에 도달하고 링잉이 잦아들 때까지 기다린 뒤 검증한다. */
+        /* 양축이 0 에 도달하고 링잉이 잦아들 때까지 기다린 뒤 검증한다.
+         *
+         * 정착 시간이 두 가지인 이유: 첫 이동은 최대 180도라 링잉이 크고
+         * 사람이 자세를 확인할 창도 겸하므로 길게(3초), 이후 세부조정은
+         * 몇 펄스짜리 이동이라 짧게(300ms) 잡는다. 안 그러면 10회 반복에
+         * 30초가 날아간다. */
         if (!motor_is_idle(MOTOR_AXIS_PAN) || !motor_is_idle(MOTOR_AXIS_TILT)) {
-            s.settle_until_ms = HAL_GetTick() + SCAN_HOME_SETTLE_MS;
+            s.settle_until_ms = HAL_GetTick()
+                              + ((s.home_retry == 0u) ? SCAN_HOME_SETTLE_MS
+                                                      : SCAN_HOME_FINE_SETTLE_MS);
         } else if (scan_settled()) {
             scan_do_home_pose();
         } else {
