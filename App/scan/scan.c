@@ -349,15 +349,22 @@ static void scan_do_homing(void)
         s.homed = false;
 #if SCAN_HOME_AXIS_PROBE
         /* 🔧 브링업 전용. scan.h SCAN_HOME_AXIS_PROBE 주석 참조.
-         *   ⚠️ 여기서 쓰는 ERR_STALL / ERR_LIDAR 는 **본래 의미가 아니다.**
+         *   ⚠️ 여기서 쓰는 ERR_OUT_OF_RANGE / ERR_LIDAR 는 **본래 의미가 아니다.**
          *     축을 가리려고 잠시 빌려 쓰는 것이고, 프로브를 끄면 전부
-         *     ERR_NOT_HOMED 로 돌아간다. 로그를 나중에 다시 볼 때 오해하지 말 것. */
+         *     ERR_NOT_HOMED 로 돌아간다. 로그를 나중에 다시 볼 때 오해하지 말 것.
+         *
+         *   ⚠️ 처음엔 팬에 ERR_STALL(5) 을 썼는데 **홈 수렴 실패가 이미 그
+         *     코드를 쓴다**(scan_do_home_pose). 그래서 5 를 받아도 "엔코더가
+         *     안 읽힌다" 인지 "읽히는데 수렴을 못 한다" 인지 구분이 안 됐다.
+         *     겹치지 않는 4(ERR_OUT_OF_RANGE — scan_start 에서만 나온다)로 옮겼다.
+         *     빌려 쓸 코드를 고를 때는 그 코드가 같은 구간에서 나올 수 있는지를
+         *     먼저 봐야 한다. */
         if (!pan_ok && !tilt_ok) {
-            scan_report_err((uint8_t)ERR_NOT_HOMED);   /* 3 = 양축 실패 */
+            scan_report_err((uint8_t)ERR_NOT_HOMED);     /* 3 = 양축 실패  */
         } else if (!pan_ok) {
-            scan_report_err((uint8_t)ERR_STALL);       /* 5 = 팬만 실패  */
+            scan_report_err((uint8_t)ERR_OUT_OF_RANGE);  /* 4 = 팬만 실패  */
         } else {
-            scan_report_err((uint8_t)ERR_LIDAR);       /* 6 = 틸트만 실패 */
+            scan_report_err((uint8_t)ERR_LIDAR);         /* 6 = 틸트만 실패 */
         }
 #else
         scan_report_err((uint8_t)ERR_NOT_HOMED);
