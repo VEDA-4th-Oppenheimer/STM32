@@ -40,6 +40,11 @@ static struct {
      * 자연히 마감이 된다. 상태를 새로 만들지 않아도 되는 이유다. */
     uint32_t settle_until_ms;
 
+    /* 파킹 포기 시각(HAL tick). settle_until_ms 와 달리 **밀리지 않는다** —
+     * 축이 계속 움직이는 한 정착 마감은 앞으로 밀리므로, 도착을 못 하는
+     * 상황에서 전류가 무한정 흐르는 걸 막으려면 별도의 절대 마감이 필요하다. */
+    uint32_t park_deadline_ms;
+
     /* 라이다 각도 래치 */
     volatile int16_t latch_pan_ddeg;
     volatile int16_t latch_tilt_ddeg;
@@ -171,6 +176,7 @@ void scan_init(void)
     s.n_lines         = 0u;
     s.tilt_to_end     = true;
     s.settle_until_ms = 0u;
+    s.park_deadline_ms = 0u;
     s.home_retry      = 0u;
     s.latch_pan_ddeg  = 0;
     s.latch_tilt_ddeg = 0;
@@ -487,14 +493,47 @@ static void scan_do_done(void)
      * ⚠️ 홈이 없으면 펄스 0 이 무엇을 뜻하는지 모르므로 움직이지 않는다.
      *   (엔코더가 없는 브링업 빌드에서는 "지금 자리 = 0" 이라 제자리다)
      *
-     * 기다리지 않고 바로 IDLE 로 간다 — 통지를 먼저 보내야 데몬이 산출물을
-     * 마감할 수 있고, 파킹은 모터 계층이 알아서 굴러간다. 파킹 도중 새 스캔이
-     * 들어와도 SC_MOVE_START 가 목표를 덮어쓰고 idle 을 기다리므로 안전하다. */
+     * 통지를 **먼저** 보낸다 — 데몬이 그걸 받아야 산출물을 마감한다. 파킹을
+     * 기다렸다가 보내면 데몬이 그 시간만큼 더 ST_SCANNING 에 머문다.
+     *
+     * ⚠️ 예전에는 여기서 곧장 SC_IDLE 로 갔다. 그러면 파킹은 모터 계층이
+     *   알아서 끝내지만 **코일 전류가 영원히 켜진 채 남는다**(scan.h 의
+     *   SCAN_PARK_* 주석 참조 — 모터가 뜨거워진 원인이 이것이다).
+     *   도착을 확인하고 끊어야 해서 SC_PARK 로 넘긴다.
+     *
+     * 파킹 도중 새 스캔이 들어와도 안전하다 — SC_MOVE_START 가 목표를
+     * 덮어쓰고 idle 을 기다리며, scan_start 가 motor_enable() 을 다시 부른다. */
     if (s.homed) {
         motor_set_target(MOTOR_AXIS_PAN,  0);
         motor_set_target(MOTOR_AXIS_TILT, 0);
     }
-    s.state = SC_IDLE;
+    s.park_deadline_ms = HAL_GetTick() + SCAN_PARK_TIMEOUT_MS;
+    s.settle_until_ms  = HAL_GetTick() + SCAN_PARK_SETTLE_MS;
+    s.state = SC_PARK;
+}
+
+/* 파킹 도착 대기 → 전류 차단. 스캔 시퀀스의 마지막이다. */
+static void scan_do_park(void)
+{
+    /* 이동 중에는 마감을 계속 밀어 둔다 — 멈춘 순간이 곧 도착 시각이 된다.
+     * 정착을 짧게(500ms) 기다리는 이유는 급정지 링잉이 잦아들기 전에 전류를
+     * 끊으면 그 진동이 그대로 위치 오차로 굳기 때문이다. */
+    if (!motor_is_idle(MOTOR_AXIS_PAN) || !motor_is_idle(MOTOR_AXIS_TILT)) {
+        s.settle_until_ms = HAL_GetTick() + SCAN_PARK_SETTLE_MS;
+    }
+
+    /* 타임아웃은 정착 조건을 **무시하고** 끊는다. 도착을 영영 못 하는 상황
+     * (드라이버 불량·축 걸림)에서 전류가 계속 흐르는 것이 바로 여기서
+     * 막으려던 그 상태이므로, 못 왔다고 켜둔 채 기다리면 안 된다. */
+    /* 뺄셈 결과를 변수로 먼저 받는다 — 합성식을 바로 캐스트하면 MISRA 10.8.
+     * 랩어라운드 안전한 비교 방식은 scan_settled() 주석 참조. */
+    const uint32_t park_elapsed = HAL_GetTick() - s.park_deadline_ms;
+    const bool timed_out = ((int32_t)park_elapsed >= 0);
+
+    if (scan_settled() || timed_out) {
+        motor_disarm();
+        s.state = SC_IDLE;
+    }
 }
 
 void scan_process(void)
@@ -562,6 +601,10 @@ void scan_process(void)
 
     case SC_DONE:
         scan_do_done();
+        break;
+
+    case SC_PARK:
+        scan_do_park();
         break;
 
     case SC_IDLE:
