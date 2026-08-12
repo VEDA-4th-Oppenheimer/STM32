@@ -126,11 +126,17 @@ int main(void)
   lidar_init(&huart6);                     // USART6(라이다) 수신 시작
 
   // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
-  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
-  //   TIM1 : 84MHz/84/5000 = 200Hz  (Pan)
-  //   TIM2 : 84MHz/84/2500 = 400Hz  (Tilt, 0.1125도/펄스 -> 45도/s)
-  // 틐트 45도/s + 라이다 100Hz = 0.45도/샘플 = 정확히 4 마이크로스텝.
+  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 그 순간의 pps.
+  //
+  // ★ 주기(ARR)는 고정이 아니다. 가감속 램프 때문에 motor 계층이 펄스마다
+  //   다시 쓴다 — 위 MX_TIM*_Init 의 Prescaler/Period 값은 쓰이지 않고
+  //   motor_init() 이 1us 틱 + 시작 속도(50pps)로 덮어쓴다(motor.h 참조).
+  //   따라서 이 두 줄보다 motor_init() 이 **먼저** 와야 한다.
+  //     Pan  : 50pps 출발 -> 100pps 순항 (11.25도/s)
+  //     Tilt : 50pps 출발 -> 400pps 순항 (45도/s)
+  // 틸트 순항 45도/s + 라이다 100Hz = 0.45도/샘플 = 정확히 4 마이크로스텝.
   // 격자 0.9도(=8 마이크로스텝)에 샘플이 정확히 2개씩 떨어진다.
+  // (램프 구간에서는 더 느리므로 샘플이 더 촘촘해질 뿐 성글어지지 않는다)
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -575,7 +581,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  // TIM1 (Pan 400Hz) / TIM2 (Tilt 800Hz).
+  // TIM1 = Pan / TIM2 = Tilt. 주기는 가감속 램프에 따라 매 펄스 달라진다.
   // 두 핸들러 모두 펄스 1개만 내고 즉시 반환한다 — 분기·printf·I2C·Delay 금지.
   if (htim->Instance == TIM1) {
     motor_pan_isr();
