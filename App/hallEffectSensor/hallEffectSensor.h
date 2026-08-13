@@ -61,4 +61,22 @@ typedef struct {
  * ⚠️ 블로킹이므로 ISR 에서 호출하지 말 것 (메인루프 전용). */
 HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data);
 
+/* I2C 페리페럴을 되살린다 (DeInit + Init).
+ *
+ * ★ 왜 필요한가 — 실기에서 확인된 것:
+ *   타임아웃이나 NACK 이 **한 번** 나면 STM32 HAL 의 I2C 가 상태를 래치한다
+ *   (hi2c->State 가 BUSY_TX 에 걸리거나 BUSY 플래그가 남는다). 그러면 이후
+ *   모든 호출이 즉시 HAL_BUSY 로 튕겨서 **리셋 전까지 영영 실패**한다.
+ *   증상: DISARM 뒤 홈을 다시 걸면 엔코더가 안 읽히고, STM32 를 리셋해야만
+ *   돌아온다.
+ *
+ * ⚠️ 슬레이브가 SDA 를 붙잡은 경우는 이걸로 안 풀린다(그때는 SCL 을 9번
+ *   토글해 클럭 아웃시켜야 한다). 하지만 우리 증상은 **MCU 리셋만으로**
+ *   복구됐다 — MCU 리셋은 클럭을 내보내지 않으므로, 슬레이브가 붙잡고
+ *   있었다면 그걸로 안 풀렸을 것이다. 즉 원인은 STM32 쪽 상태 하나뿐이고
+ *   DeInit/Init 으로 충분하다. 9클럭 복구는 필요해지면 그때 넣는다.
+ *
+ * 비용은 수백 us 다. 실패했을 때만 부른다. */
+HAL_StatusTypeDef Encoder_BusRecover(I2C_HandleTypeDef *hi2c);
+
 #endif /* HALL_EFFECT_SENSOR_H */

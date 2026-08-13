@@ -198,7 +198,18 @@ int32_t motor_get_pulse(motor_axis_t ax);
 int16_t motor_get_ddeg(motor_axis_t ax);
 
 /* --- 엔코더 (블로킹 — 메인루프 전용, ISR 에서 호출 금지) ------------------*/
+/* 판독 1회. 실패하면 **버스를 되살리고 최대 MOTOR_ENC_MAX_RETRY 번** 다시
+ * 시도한다(구현부 주석 참조). 실패 시 최악 대기는
+ *   (재시도-1) x (I2C_TIMEOUT 10ms x 2 + MOTOR_ENC_RETRY_DELAY_MS 10ms)
+ * 약 120ms 다. 홈에서 축당 한 번 부르므로 무시할 수준이다. */
 HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out);
+
+/* 지금까지 누적된 재시도 횟수(축별). 0 이 아니면 I2C 가 흔들리고 있다는 뜻.
+ *
+ * ⚠️ 재시도는 문제를 **가린다**. 배선이 서서히 나빠져도 몇 번 만에 성공하면
+ *   아무도 모른 채 지나간다. 이 값을 주기적으로 보거나 산출물에 실어서,
+ *   "되긴 되는데 점점 나빠지는" 상태를 알아챌 수 있게 할 것. */
+uint32_t motor_encoder_retry_count(motor_axis_t ax);
 
 /* 축에 물린 I2C 핸들 (Pan=&hi2c3 / Tilt=&hi2c1).
  * 판독은 motor_read_encoder 를 쓰고, 이건 **버스 자체**를 다뤄야 할 때만
@@ -209,8 +220,9 @@ I2C_HandleTypeDef *motor_axis_i2c(motor_axis_t ax);
 /* 엔코더 실측각(도) → 펄스. 영점 상수를 적용한다. */
 int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg);
 
-/* 재시도 포함 판독 후 펄스로 환산. 성공 시 HAL_OK 와 *out_pulse 반환.
- * 부팅 직후용이라 HAL_Delay 를 쓴다 → 메인루프에서만 호출할 것. */
+/* 판독 후 펄스로 환산. 성공 시 HAL_OK 와 *out_pulse 반환.
+ * 재시도·버스 복구는 motor_read_encoder 가 하므로 여기서는 환산만 한다.
+ * 그쪽이 HAL_Delay 를 쓰므로 메인루프에서만 호출할 것. */
 HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse);
 
 /* --- 타이머 ISR 진입점 ----------------------------------------------------

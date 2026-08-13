@@ -319,14 +319,53 @@ I2C_HandleTypeDef *motor_axis_i2c(motor_axis_t ax)
     return (ax == MOTOR_AXIS_PAN) ? &hi2c3 : &hi2c1;
 }
 
+/* 엔코더 판독 1회. 실패하면 페리페럴을 되살리고 다시 시도한다.
+ *
+ * ★ 재시도가 **여기** 있는 이유 (2026-08-12):
+ *   예전에는 재시도가 motor_read_encoder_pulse 에만 있었고, 정작 홈
+ *   (scan_do_homing)은 재시도 없는 이 함수를 썼다. 그래서 I2C 가 **한 번**
+ *   튀면 그대로 ERR 로 확정돼 스캔이 시작조차 못 했다. 두 경로가 같은
+ *   신뢰도를 갖도록 재시도를 아래층으로 내렸다.
+ *
+ * ★ 재시도 사이에 Encoder_BusRecover 를 부르는 이유:
+ *   HAL 이 타임아웃/NACK 뒤 상태를 래치해서, 되살리지 않으면 이어지는
+ *   시도가 전부 즉시 HAL_BUSY 로 튕긴다 — 재시도가 무의미해진다.
+ *   실기 증상: DISARM 뒤 홈을 걸면 안 읽히고 STM32 를 리셋해야 돌아왔다.
+ *   NRST(전원 유지) 만으로 복구된 것이 "슬레이브가 아니라 STM32 쪽 상태"
+ *   라는 근거다.
+ *
+ * ⚠️ 몇 번 만에 성공했는지 세어 둔다(motor_encoder_retry_count). 재시도가
+ *   조용히 성공하면 배선이 나빠지는 것을 아무도 모른 채 지나가기 때문이다 —
+ *   복구가 문제를 가리는 것을 막으려면 횟수가 보여야 한다. */
+static uint32_t s_enc_retry_total[MOTOR_AXIS_COUNT];
+
 HAL_StatusTypeDef motor_read_encoder(motor_axis_t ax, Encoder_t *out)
 {
     HAL_StatusTypeDef st = HAL_ERROR;
 
     if ((ax < MOTOR_AXIS_COUNT) && (out != NULL)) {
-        st = Encoder_Read(motor_axis_i2c(ax), out);
+        I2C_HandleTypeDef *hi2c = motor_axis_i2c(ax);
+        uint32_t attempt;
+
+        for (attempt = 0u;
+             (attempt < MOTOR_ENC_MAX_RETRY) && (st != HAL_OK);
+             attempt++) {
+            if (attempt > 0u) {
+                /* 직전 시도가 실패했다 — 페리페럴을 되살리고 잠깐 쉰다.
+                 * 되살리지 않으면 아래 Encoder_Read 가 즉시 HAL_BUSY 다. */
+                (void)Encoder_BusRecover(hi2c);
+                HAL_Delay(MOTOR_ENC_RETRY_DELAY_MS);
+                s_enc_retry_total[ax]++;
+            }
+            st = Encoder_Read(hi2c, out);
+        }
     }
     return st;
+}
+
+uint32_t motor_encoder_retry_count(motor_axis_t ax)
+{
+    return (ax < MOTOR_AXIS_COUNT) ? s_enc_retry_total[ax] : 0u;
 }
 
 int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
@@ -366,19 +405,16 @@ HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse)
     HAL_StatusTypeDef st = HAL_ERROR;
 
     if ((ax < MOTOR_AXIS_COUNT) && (out_pulse != NULL)) {
-        /* 부팅 직후 첫 판독이 NACK 나는 경우가 있어 재시도한다.
+        /* 재시도·버스 복구는 motor_read_encoder 가 한다(그쪽 주석 참조).
+         * 예전에는 이 루프가 재시도를 들고 있었는데, 그러면 같은 함수를
+         * 쓰는 홈 경로는 재시도 없이 한 방에 실패했다.
+         *
          * ⚠️ 실패를 조용히 넘기면 호출자가 위치를 0 으로 두게 되고, 목표(0)와
          *   우연히 일치해 "축이 실제로는 안 움직였는데 홈 완료" 가 된다.
          *   그래서 실패는 반드시 상태로 돌려준다. */
-        for (uint32_t retry = 0u;
-             (retry < MOTOR_ENC_MAX_RETRY) && (st != HAL_OK);
-             retry++) {
-            st = motor_read_encoder(ax, &enc);
-            if (st == HAL_OK) {
-                *out_pulse = motor_encoder_deg_to_pulse(ax, enc.degree);
-            } else {
-                HAL_Delay(MOTOR_ENC_RETRY_DELAY_MS);
-            }
+        st = motor_read_encoder(ax, &enc);
+        if (st == HAL_OK) {
+            *out_pulse = motor_encoder_deg_to_pulse(ax, enc.degree);
         }
     }
     return st;

@@ -69,3 +69,21 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
 
     return status;
 }
+
+/* 헤더의 설명 참조. DeInit 이 페리페럴을 끄고 클럭·상태를 초기화하며,
+ * Init 이 CubeMX 가 넣어둔 설정(100kHz 등)으로 다시 세운다. hi2c->Init 은
+ * 구조체에 남아 있으므로 재설정 인자를 따로 들고 있을 필요가 없다.
+ *
+ * ⚠️ DeInit 실패는 무시하고 Init 을 시도한다. 이미 망가진 상태를 되살리려는
+ *   것이므로 "정상적으로 끄는 데 실패했다" 는 진행을 막을 이유가 못 된다.
+ *   최종 판단은 Init 결과로 한다. */
+HAL_StatusTypeDef Encoder_BusRecover(I2C_HandleTypeDef *hi2c)
+{
+    HAL_StatusTypeDef status = HAL_ERROR;
+
+    if (hi2c != NULL) {
+        (void)HAL_I2C_DeInit(hi2c);
+        status = HAL_I2C_Init(hi2c);
+    }
+    return status;
+}
