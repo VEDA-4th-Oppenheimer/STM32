@@ -127,7 +127,25 @@ typedef enum {
 #define MOTOR_PAN_CRUISE_PPS      100u   /* 11.25도/s */
 #define MOTOR_PAN_ACCEL_PPS2      600u
 
-#define MOTOR_TILT_CRUISE_PPS     400u   /* 45도/s — 라이다 샘플 밀도의 근거 */
+/* ⚠️ 800pps = 90도/s. 라이다 100Hz 이므로 샘플 간격이 **0.9도** 가 되어
+ *   0.9도 격자와 정확히 같아진다. 셀당 평균 1샘플이라 여유가 없다:
+ *   라이다가 정확히 100.0Hz 가 아니거나 반올림 배정이 한쪽으로 쏠리면
+ *   **빈 셀이 생긴다.** 실측 전례가 있다 — 틸트 90도/s 로 1.0도 격자를
+ *   찍었을 때 빈 셀 365개가 났고 그중 204개가 스윕 끝점(row 0)에 몰렸다.
+ *
+ *   그럼에도 800 을 쓰는 이유는 스캔 시간이다. 램프 산수를 호스트에서 그대로
+ *   돌려 본 값(1600펄스 = 틸트 180도 한 줄):
+ *       400pps  줄당 4.261s  순항펄스 1468/1600  200줄 = 14.2분
+ *       800pps  줄당 2.559s  순항펄스 1068/1600  200줄 =  8.5분
+ *   진단을 위해 스캔을 자주 돌려야 하는 동안의 선택이며, 산출물 품질이
+ *   우선인 시점에는 600(0.675도 간격, 셀당 1.33샘플) 이나 400 으로 되돌릴 것.
+ *
+ *   ⚠️ 가감속 구간(532펄스 = 스윕의 60도)은 순항보다 느려 샘플이 촘촘하다.
+ *     즉 위험한 것은 **가운데 120도(순항 구간)** 뿐이다. 빈 셀이 스윕
+ *     중앙에 몰려 나오면 이 값이 원인이고, 끝점에 몰리면 다른 문제다.
+ *
+ *   ★ 빈 셀이 보이면 이 값을 먼저 의심할 것. 기구 문제로 오인하기 쉽다. */
+#define MOTOR_TILT_CRUISE_PPS     800u   /* 90도/s — 위 경고 참조 */
 #define MOTOR_TILT_ACCEL_PPS2     1200u
 
 /* TIM1 의 ARR 은 16비트다. 시작 속도가 너무 느리면 한 주기를 표현할 수 없어
@@ -147,8 +165,8 @@ _Static_assert((MOTOR_START_PPS <= MOTOR_PAN_CRUISE_PPS)
  *    ③ 그 값을 아래에 넣는다
  *  상수가 틀려도 CMD_HOMED 가 raw 를 함께 올리므로 이미 찍은 스캔의 각도를
  *  오프라인에서 재계산할 수 있다(재스캔 불필요). */
-#define MOTOR_PAN_ZERO_OFFSET_DEG    173.61f
-#define MOTOR_TILT_ZERO_OFFSET_DEG   312.19f
+#define MOTOR_PAN_ZERO_OFFSET_DEG    225.31f
+#define MOTOR_TILT_ZERO_OFFSET_DEG   123.40f
 
 /* 부팅 직후 I2C/센서가 아직 안정화되지 않아 첫 판독이 NACK 나는 경우 대비 */
 #define MOTOR_ENC_MAX_RETRY          5u
