@@ -34,7 +34,7 @@ struct bench_axis {
 static struct bench_axis s_ax[MOTOR_AXIS_COUNT];
 
 /* -180..+180 로 감싼 상대각. 0 을 넘나들 때 359도 점프로 보이지 않게 한다.
- * ⚠️ 루프로 감으면 MISRA 14.1(부동소수 루프 카운터)·17.8(인자 수정)에 걸리고,
+ * 주의: 루프로 감으면 MISRA 14.1(부동소수 루프 카운터)·17.8(인자 수정)에 걸리고,
  *   입력이 비정상적으로 클 때 반복 횟수도 예측이 안 된다. fmodf 로 한 번에. */
 static float wrap180(float d)
 {
@@ -113,7 +113,7 @@ void encoder_bench_run(void)
         s_last_ms     = now;
     }
 
-    /* ⚠️ 부호 없는 뺄셈이라 tick 랩어라운드(49.7일)에도 경과시간이 옳게
+    /* 주의: 부호 없는 뺄셈이라 tick 랩어라운드(49.7일)에도 경과시간이 옳게
      *   나온다. 부호 캐스팅(MISRA 10.8)이 필요 없는 형태다. */
     if ((now - s_last_ms) >= ENCODER_BENCH_PERIOD_MS) {
         s_last_ms = now;

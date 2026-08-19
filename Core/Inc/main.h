@@ -71,7 +71,9 @@ void Error_Handler(void);
 #define TILT_DIR_GPIO_Port GPIOA
 #define PAN_EN_Pin GPIO_PIN_1
 #define PAN_EN_GPIO_Port GPIOB
-#define PAN_STEP_Pin GPIO_PIN_14
+#define TILT_EN_Pin GPIO_PIN_12
+#define TILT_EN_GPIO_Port GPIOB
+#define PAN_STEP_Pin GPIO_PIN_13
 #define PAN_STEP_GPIO_Port GPIOB
 #define PAN_DIR_Pin GPIO_PIN_15
 #define PAN_DIR_GPIO_Port GPIOB
@@ -85,8 +87,6 @@ void Error_Handler(void);
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
-#define TILT_EN_Pin GPIO_PIN_6
-#define TILT_EN_GPIO_Port GPIOB
 #define TILT_ENCODER_SCL_Pin GPIO_PIN_8
 #define TILT_ENCODER_SCL_GPIO_Port GPIOB
 #define TILT_ENCODER_SDA_Pin GPIO_PIN_9

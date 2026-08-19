@@ -15,7 +15,9 @@
 #include "uart_rpi.h"           /* RPi 링크 UART/프로토콜 디스패처 (이현우) */
 
 #include "hallEffectSensor.h"   /* MT6701 자기 엔코더 (강유근) */
-#include "encoder_bench.h"      /* 엔코더 벤치 판독 (브링업 전용, 기본 껼짐) */
+#include "encoder_bench.h"
+#include "motor_bench.h"      /* 모터 왕복 테스트 (브링업 전용, 기본 꺼짐) */
+#include "lidar_bench.h"      /* 라이다 수신 테스트 (브링업 전용, 기본 꺼짐) */      /* 엔코더 벤치 판독 (브링업 전용, 기본 껼짐) */
 #include "motor.h"              /* 2축 축 드라이버 (ISR 은 펄스만)          */
 #include "scan.h"               /* 스캔 시퀀서 (메인루프)                   */
 #include "lidar.h"              /* TOFSense-F2P 수신 (USART6, 송영빈)       */
@@ -124,11 +126,17 @@ int main(void)
   lidar_init(&huart6);                     // USART6(라이다) 수신 시작
 
   // Pan(TIM1) / Tilt(TIM2) 타이머 인터럽트 시작.
-  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 최대 pps.
-  //   TIM1 : 84MHz/84/5000 = 200Hz  (Pan)
-  //   TIM2 : 84MHz/84/2500 = 400Hz  (Tilt, 0.1125도/펄스 -> 45도/s)
-  // 틐트 45도/s + 라이다 100Hz = 0.45도/샘플 = 정확히 4 마이크로스텝.
+  // 인터럽트 1회당 최대 1펄스이므로 타이머 주파수 = 그 순간의 pps.
+  //
+  // ★ 주기(ARR)는 고정이 아니다. 가감속 램프 때문에 motor 계층이 펄스마다
+  //   다시 쓴다 — 위 MX_TIM*_Init 의 Prescaler/Period 값은 쓰이지 않고
+  //   motor_init() 이 1us 틱 + 시작 속도(50pps)로 덮어쓴다(motor.h 참조).
+  //   따라서 이 두 줄보다 motor_init() 이 **먼저** 와야 한다.
+  //     Pan  : 50pps 출발 -> 100pps 순항 (11.25도/s)
+  //     Tilt : 50pps 출발 -> 400pps 순항 (45도/s)
+  // 틸트 순항 45도/s + 라이다 100Hz = 0.45도/샘플 = 정확히 4 마이크로스텝.
   // 격자 0.9도(=8 마이크로스텝)에 샘플이 정확히 2개씩 떨어진다.
+  // (램프 구간에서는 더 느리므로 샘플이 더 촘촘해질 뿐 성글어지지 않는다)
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -142,9 +150,12 @@ int main(void)
   while (1) {
 
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    uart_rpi_status_tick();                // CMD_STATUS 1초 주기 상행 (v6)
     lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
-    encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
+    //motor_bench_run();                     // 모터 왕복 테스트 (기본 꺼짐)
+    //lidar_bench_run();                     // 라이다 수신 테스트 (기본 꺼짐)
+    //encoder_bench_run();                   // 엔코더 벤치 판독 (기본 껼짐)
     HAL_IWDG_Refresh(&hiwdg);              // 워치독 먹이기
 
 
@@ -219,7 +230,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.ClockSpeed = 100000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -253,7 +264,7 @@ static void MX_I2C3_Init(void)
 
   /* USER CODE END I2C3_Init 1 */
   hi2c3.Instance = I2C3;
-  hi2c3.Init.ClockSpeed = 400000;
+  hi2c3.Init.ClockSpeed = 100000;
   hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c3.Init.OwnAddress1 = 0;
   hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -320,7 +331,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 84-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 5000-1;
+  htim1.Init.Period = 10000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -511,7 +522,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, LD2_Pin|TILT_STEP_Pin|TILT_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, PAN_EN_Pin|TILT_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -526,8 +537,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PAN_EN_Pin PAN_STEP_Pin PAN_DIR_Pin TILT_EN_Pin */
-  GPIO_InitStruct.Pin = PAN_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin|TILT_EN_Pin;
+  /*Configure GPIO pins : PAN_EN_Pin TILT_EN_Pin PAN_STEP_Pin PAN_DIR_Pin */
+  GPIO_InitStruct.Pin = PAN_EN_Pin|TILT_EN_Pin|PAN_STEP_Pin|PAN_DIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -571,7 +582,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  // TIM1 (Pan 400Hz) / TIM2 (Tilt 800Hz).
+  // TIM1 = Pan / TIM2 = Tilt. 주기는 가감속 램프에 따라 매 펄스 달라진다.
   // 두 핸들러 모두 펄스 1개만 내고 즉시 반환한다 — 분기·printf·I2C·Delay 금지.
   if (htim->Instance == TIM1) {
     motor_pan_isr();
@@ -590,10 +601,20 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  /* 주의: 여기서 반환하면 안 된다.
+   *
+   *   while(1) 이 주석 처리된 채로 남아 있었다. 그러면 초기화가 실패해도
+   *   인터럽트만 끈 채 실행이 계속되는데, SysTick 이 죽어 HAL_GetTick 이
+   *   멈추고 HAL_Delay 는 영영 안 돌아온다. 그런데 IWDG 갱신은 인터럽트가
+   *   아니라 메인루프라, 워치독조차 이 상태를 못 잡는다. 즉 반쯤 죽은 채로
+   *   RPi 의 PING 에는 답할 수도 있어 링크가 살아있는 것처럼 보인다.
+   *
+   *   멈춰 서면 IWDG 가 갱신되지 않아 하드웨어가 리셋한다. 조용히 이상하게
+   *   도는 것보다 낫다. */
   __disable_irq();
-  // while (1)
-  // {
-  // }
+  while (1)
+  {
+  }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

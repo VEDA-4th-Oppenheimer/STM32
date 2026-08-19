@@ -47,6 +47,11 @@ static volatile uint32_t g_rx_bytes   = 0U;   /* 파싱 이전 원시 수신 바
  * 유력한 원인 중 하나다 — lidar_get_uart_diag() 로 확인. */
 static volatile uint8_t  g_last_rearm_rc = 0xFFU;
 
+/* 마지막으로 체크섬을 통과한 프레임. 진단 출력용 스냅샷이라 원자성까지는
+ * 필요 없다(사람이 읽는 값이고, 찢어져도 다음 갱신에 바로잡힌다). */
+static volatile lidar_frame_t g_last_frame;
+static volatile bool          g_have_frame = false;
+
 /* ===== 내부 함수 선언 ===== */
 static void lidar_reset_rx(void);
 static void lidar_rearm_it(void);
@@ -86,6 +91,23 @@ void lidar_get_uart_diag(uint8_t *rearm_rc, uint32_t *rx_state, uint32_t *err_co
     if (err_code != NULL) {
         *err_code = (g_huart != NULL) ? g_huart->ErrorCode : 0xFFFFFFFFU;
     }
+}
+
+bool lidar_get_last_frame(lidar_frame_t *out)
+{
+    bool ok = false;
+
+    if ((out != NULL) && g_have_frame) {
+        /* volatile 구조체를 통째로 대입하면 컴파일러마다 경고가 갈려 필드별로
+         * 옮긴다. 찢어져도 진단용이라 다음 갱신에 바로잡힌다. */
+        out->device_time_ms  = g_last_frame.device_time_ms;
+        out->d_mm            = g_last_frame.d_mm;
+        out->signal_strength = g_last_frame.signal_strength;
+        out->dis_status      = g_last_frame.dis_status;
+        out->range_precision = g_last_frame.range_precision;
+        ok = true;
+    }
+    return ok;
 }
 
 /* ---------------------------------------------------------------------------
@@ -137,7 +159,15 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
                         {
                             g_frames++;
                             g_raw_dist_mm = (uint16_t)f.d_mm;
-                            /* ★ 각도를 여기서 잡는다. 이 시점이 프레임이
+
+                            /* 진단용 스냅샷 (lidar_bench 가 읽는다) */
+                            g_last_frame.device_time_ms  = f.device_time_ms;
+                            g_last_frame.d_mm            = f.d_mm;
+                            g_last_frame.signal_strength = f.signal_strength;
+                            g_last_frame.dis_status      = f.dis_status;
+                            g_last_frame.range_precision = f.range_precision;
+                            g_have_frame = true;
+                            /* 핵심: 각도를 여기서 잡는다. 이 시점이 프레임이
                              *   완성된 순간이라 거리와 시간축이 맞는다. */
                             lidar_push_sample(&f);
                         }

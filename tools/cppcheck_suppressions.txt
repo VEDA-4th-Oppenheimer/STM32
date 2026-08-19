@@ -73,6 +73,19 @@ misra-c2012-21.6:*App/hallEffectSensor/encoder_bench.c
 #           shared/protocol.h 를 2.5 에서 뺀 것과 같은 성격이다.
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.c
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.h
+# ---
+# --- App/motor/motor_bench.{c,h}, App/lidar/lidar_bench.{c,h}, App/bench_common.h
+#   encoder_bench 와 동일한 성격의 브링업 전용 도구. 각 TEST 플래그로 켜고 끄며
+#   꺼진 구성에서는 매크로가 미사용으로 남고, printf 는 사람이 읽는 것이 목적이다.
+#   플래그가 0 이면 파일이 통째로 컴파일아웃되어 릴리즈엔 안 남는다.
+#   폴더 통째가 아니라 **파일·룰 한정** — motor.c / lidar.c 는 계속 검사한다.
+misra-c2012-21.6:*App/motor/motor_bench.c
+misra-c2012-2.5:*App/motor/motor_bench.c
+misra-c2012-2.5:*App/motor/motor_bench.h
+misra-c2012-21.6:*App/lidar/lidar_bench.c
+misra-c2012-2.5:*App/lidar/lidar_bench.c
+misra-c2012-2.5:*App/lidar/lidar_bench.h
+misra-c2012-2.5:*App/bench_common.h
 
 # --- 7. cppcheck 2.13.0 오탐 (2026-08-05) ---
 #   ※ 구분선에 '#' 단독 줄을 쓰지 말 것. 2.13 파서는 길이 2 이상일 때만 주석으로
@@ -89,3 +102,9 @@ misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.h
 #     해제: CI cppcheck 가 2.14 이상이 되면 이 줄을 지운다.
 #           (noble apt 는 2.13.0 뿐 — 버전 고정 방식은 별도 과제)
 misra-c2012-11.8:*App/motor/motor.c
+#   같은 오탐이 hallEffectSensor.c 에도 있다 (2026-08-19).
+#     대상: Encoder_BusRecover 의 9클럭 버스 해제 — const struct i2c_pins * 의
+#           멤버(GPIO_TypeDef *)를 HAL_GPIO_Init/WritePin/ReadPin 에 넘기는 12곳.
+#     근거·해제 조건은 위 motor.c 와 동일하다. 로컬 cppcheck 2.21 은 0건인데
+#     CI 2.13.0 만 지적해서, 로컬 통과 후 CI 에서 처음 드러났다.
+misra-c2012-11.8:*App/hallEffectSensor/hallEffectSensor.c

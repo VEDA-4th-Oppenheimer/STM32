@@ -3,7 +3,7 @@
  * ----------------------------------------------------------------------------
  *  담당: 송영빈 (원 구현) / 이현우 (각도 래치 + 샘플 큐 확장)
  *
- *  ★ 각도-거리 짝짓기가 이 파일의 핵심이다.
+ *  핵심: 각도-거리 짝짓기가 이 파일의 핵심이다.
  *
  *    프레임 마지막 바이트를 받은 **그 순간** 모터 각도를 함께 잡아 둔다.
  *    폴링(예전 lidar_get_distance_mm)으로는 안 된다 — 메인루프가 언제 읽느냐에
@@ -25,7 +25,9 @@
 #define LIDAR_H
 
 #include "stm32f4xx_hal.h"
+#include "lidar_parser.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 /* 샘플 링버퍼 깊이.
  * 라이다가 100Hz(10ms/프레임)이고 메인루프는 프레임 상행(115200 에서 23바이트
@@ -53,7 +55,9 @@ uint32_t lidar_get_csum_errors(void);   /* 체크섬 불일치 수           */
 uint32_t lidar_get_queue_drops(void);   /* 큐가 차서 버린 샘플 수     */
 
 /* rx=0 이면 위 카운터 이전 단계(배선/전원/USART6 설정)에서 바이트가 아예
- * 안 들어온다는 뜻 — frame_count/csum_errors 만으로는 구분이 안 된다. */
+ * 안 들어온다는 뜻 — frame_count/csum_errors 만으로는 구분이 안 된다.
+ *   bytes=0            -> 물리 배선(TX/RX, GND, 전원)
+ *   bytes>0, frames=0  -> 헤더 불일치(보레이트·기종·프로토콜 모드) */
 uint32_t lidar_get_rx_bytes(void);      /* USART6 로 들어온 총 바이트 */
 
 /* UART 수신 재무장(HAL_UART_Receive_IT) 상태 진단.
@@ -61,5 +65,9 @@ uint32_t lidar_get_rx_bytes(void);      /* USART6 로 들어온 총 바이트 */
  *   rx_state : HAL RxState (0x62=BUSY_RX 가 정상 수신대기, 0x22=READY 면 미대기)
  *   err_code : ErrorCode (0=정상, 8=ORE 오버런 등) */
 void lidar_get_uart_diag(uint8_t *rearm_rc, uint32_t *rx_state, uint32_t *err_code);
+
+/* 마지막으로 체크섬을 통과한 프레임의 원본 필드. 진단용(브링업 도구가 쓴다).
+ * 프레임이 한 번도 안 왔으면 false. */
+bool lidar_get_last_frame(lidar_frame_t *out);
 
 #endif /* LIDAR_H */

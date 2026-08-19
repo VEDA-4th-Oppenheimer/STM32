@@ -10,7 +10,7 @@ RPi(엣지 서버)와 UART로 통신하며, 2축 스텝모터(방위/고각)·�
 
 ---
 
-## 📂 디렉토리 구조
+##  디렉토리 구조
 
 ```
 .
@@ -24,13 +24,13 @@ RPi(엣지 서버)와 UART로 통신하며, 2축 스텝모터(방위/고각)·�
 │   ├── Inc/  Src/
 ├── Drivers/                 # HAL / CMSIS (벤더)
 │
-├── App/                     # ★ 우리 앱 로직 (CubeMX 재생성에도 안전)
+├── App/                     # 핵심: 우리 앱 로직 (CubeMX 재생성에도 안전)
 │   ├── uart_rpi/            #   RPi UART 포트제어·프로토콜 디스패처  (이현우)
-│   ├── motor/               #   스텝모터·리밋 홈 캘리브레이션        (강유근)  ⏳
-│   └── lidar/               #   TOFSense-F2 P NLink 파서             (송영빈)  ⏳
+│   ├── motor/               #   스텝모터·리밋 홈 캘리브레이션        (강유근)
+│   └── lidar/               #   TOFSense-F2 P NLink 파서             (송영빈)
 │
 ├── shared/
-│   └── protocol.h           # ★ RPi↔STM32 통신 계약 (rpi repo에서 동기화)
+│   └── protocol.h           # 핵심: RPi↔STM32 통신 계약 (rpi repo에서 동기화)
 │
 ├── tools/                   # 정적분석 설정
 │   ├── cppcheck_suppressions.txt
@@ -50,7 +50,7 @@ RPi(엣지 서버)와 UART로 통신하며, 2축 스텝모터(방위/고각)·�
 
 ---
 
-## 🔨 빌드
+##  빌드
 
 ### 요구 도구
 - `arm-none-eabi-gcc` (권장 15.2 / Arm GNU Toolchain)
@@ -75,7 +75,7 @@ rm -rf build
 
 ---
 
-## 🛡️ 정적분석 (로컬에서 push 전 검사)
+##  정적분석 (로컬에서 push 전 검사)
 
 ```bash
 bash tools/run_static_analysis.sh      # repo 루트에서 실행
@@ -89,7 +89,7 @@ CI(`.github/workflows/static_analysis.yml`)가 push/PR 시 자동 실행한다.
 
 ---
 
-## 🔗 protocol.h 동기화 규칙 (중요)
+##  protocol.h 동기화 규칙 (중요)
 
 `shared/protocol.h` 는 **RPi↔STM32 통신 계약**이며 **단일 원본은 `rpi` repo(`rpi/shared/protocol.h`)** 다.
 이 repo의 사본은 **다운스트림**이다.
@@ -100,7 +100,7 @@ CI(`.github/workflows/static_analysis.yml`)가 push/PR 시 자동 실행한다.
 
 ---
 
-## 👥 모듈 담당 (CODEOWNERS)
+##  모듈 담당 (CODEOWNERS)
 
 | 경로 | 담당 |
 |---|---|
@@ -111,7 +111,7 @@ CI(`.github/workflows/static_analysis.yml`)가 push/PR 시 자동 실행한다.
 
 ---
 
-## ⚠️ 주의사항
+## 주의: 주의사항
 
 - **`.ioc` 는 반드시 커밋** (HW 설정 single source). `Core/`·`Drivers/` 생성물도 커밋해 재생성 없이 동일 빌드 보장.
 - **`build/`, `compile_commands.json`, `.mxproject`, `.idea/` 는 커밋 금지** (`.gitignore` 처리됨).

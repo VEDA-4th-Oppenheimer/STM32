@@ -13,7 +13,8 @@
  * ==========================================================================*/
 #include "uart_rpi.h"
 #include "motor.h"        /* CMD_DISARM → motor_disarm            */
-#include "scan.h"         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
+#include "scan.h"
+#include "lidar.h"      /* 큐 drop 카운터 (CMD_STATUS) */         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
@@ -42,9 +43,22 @@ static volatile uint8_t    s_rb[256];      /* 수신 링버퍼                  
 static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
 static uint32_t s_scan_count = 0; /* SCAN 시작할 때 point count 초기화 */
-/* protocol.h 프레임 빌드 → USART1 TX 전송 (상행) */
-void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
+static uint32_t s_tx_fail   = 0u; /* 송신 실패 누적 (진단용)              */
+static volatile uint32_t s_rb_ovf = 0u; /* 수신 링버퍼 오버플로 (진단)    */
+
+/* protocol.h 프레임 빌드 -> USART1 TX 전송 (상행).
+ *
+ * 반환 true = HAL 이 프레임 전체를 보냈다고 보고했다.
+ *
+ * 주의: 예전에는 결과를 (void) 로 버렸다. 그러면 타임아웃이나 부분 전송이
+ *   나도 호출자가 알 수 없는데, 특히 스캔 점은 보낸 셈 치고 카운터를 올려서
+ *   SCAN_DONE.point_count 가 **RPi 가 실제로 받은 점 수보다 커진다.** 데몬은
+ *   그 값으로 유실을 대조하므로 판정이 거짓말이 된다. PONG/HOMED/ERROR 도
+ *   조용히 사라진다. */
+bool uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
 {
+    bool ok = false;
+
     if (payload_len <= PROTO_MAX_PAYLOAD) {            /* CWE-120 경계검사 */
         uint8_t  frame[PROTO_MAX_FRAME];
         uint16_t crc;
@@ -65,8 +79,82 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
         frame[total + 1u] = (uint8_t)((crc >> 8) & 0xFFu);
         total = (uint8_t)(total + PROTO_CRC_LEN);
 
-        (void)HAL_UART_Transmit(s_huart, frame, total, 100u);
-        DBG("[TX] cmd=0x%02X len=%u\r\n", cmd, payload_len);
+        ok = (HAL_UART_Transmit(s_huart, frame, total, 100u) == HAL_OK);
+        if (!ok) {
+            s_tx_fail++;
+        }
+        DBG("[TX] cmd=0x%02X len=%u ok=%u\r\n", cmd, payload_len, (unsigned)ok);
+    }
+    return ok;
+}
+
+/* 스캔 점 카운터를 0 으로. **요청이 받아들여진 뒤에** 부를 것 — 디스패처에서
+ * 먼저 밀면 거절된 요청이 진행 중인 스캔의 집계를 지운다. */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — App/scan 이 호출 */
+void uart_rpi_reset_scan_count(void)
+{
+    s_scan_count = 0u;
+}
+
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — 진단 경로에서 호출 */
+uint32_t uart_rpi_tx_fail_count(void)
+{
+    return s_tx_fail;
+}
+
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — 진단 경로에서 호출 */
+uint32_t uart_rpi_rx_overflow_count(void)
+{
+    return s_rb_ovf;
+}
+
+/* u32 카운터를 u16 필드로 줄인다. 포화시켜 "많다" 를 보존한다 — 잘라내면
+ * 65536 번째에 0 으로 보여 오히려 정상처럼 읽힌다. */
+static proto_u16 sat16(uint32_t v)
+{
+    return (v > 0xFFFFu) ? (proto_u16)0xFFFFu : (proto_u16)v;
+}
+
+/* CMD_STATUS 주기 송신 (v6).
+ *
+ * 핵심: v5 까지 이 프레임은 정의만 있고 한 번도 보내지지 않았다. 그래서
+ *   드라이버의 STF_HOMED 는 CMD_HOMED 때 서기만 하고 내려갈 일이 없었고,
+ *   STM 을 리셋/재플래시하면 STM 은 홈이 풀렸는데 캐시만 참으로 남았다.
+ *   이제 1초마다 진실을 보낸다.
+ *
+ * 주기를 1초로 잡은 이유: 각도는 이미 SCAN_DATA 에 실려 오고 카운터는 천천히
+ *   변한다. 프레임 20B x 1Hz = UART 0.17% 라 스캔(20%)에 영향이 없다.
+ *   100ms 로 하면 1.7% 로 여전히 무해하지만 얻는 것이 없다. */
+void uart_rpi_status_tick(void)
+{
+    static uint32_t s_last_ms = 0u;
+    const uint32_t now = HAL_GetTick();
+
+    /* 부호 없는 뺄셈이라 HAL_GetTick 이 49일 만에 한 바퀴 돌아도 안전하다. */
+    if ((now - s_last_ms) >= STATUS_PERIOD_MS) {
+        struct proto_status st;
+        uint8_t flags = 0u;
+
+        s_last_ms = now;
+
+        if (scan_is_homed()) {
+            flags |= (uint8_t)STF_HOMED;
+        }
+        if (scan_is_busy()) {
+            flags |= (uint8_t)STF_SCANNING;
+        }
+
+        st.cur_pan_ddeg  = (proto_s16)motor_pulse_to_ddeg(motor_get_pulse(MOTOR_AXIS_PAN));
+        st.cur_tilt_ddeg = (proto_s16)motor_pulse_to_ddeg(motor_get_pulse(MOTOR_AXIS_TILT));
+        st.flags         = flags;
+        st.tx_fail       = sat16(s_tx_fail);
+        st.rx_ovf        = sat16(s_rb_ovf);
+        st.enc_retry     = sat16(motor_encoder_retry_count(MOTOR_AXIS_PAN)
+                               + motor_encoder_retry_count(MOTOR_AXIS_TILT));
+        st.lidar_drop    = sat16(lidar_get_queue_drops());
+        st.reject_busy   = sat16(scan_reject_busy_count());
+
+        (void)uart_rpi_send_frame((uint8_t)CMD_STATUS, &st, (uint8_t)sizeof(st));
     }
 }
 
@@ -89,8 +177,11 @@ void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
                                    .stm_ts_ms       = HAL_GetTick(),
                                    .dis_status      = dis_status,
                                    .range_precision = range_precision };
-    uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
-    s_scan_count++;
+    /* 보낸 것만 센다. 실패한 프레임까지 세면 SCAN_DONE.point_count 가
+     * RPi 가 받은 수보다 커져 유실 대조가 무의미해진다. */
+    if (uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt))) {
+        s_scan_count++;
+    }
 }
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE): 상행한 총 point 수 전송 */
@@ -98,7 +189,7 @@ void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
 void uart_rpi_send_scan_done(void)
 {
     struct proto_scan_done d = { .point_count = s_scan_count };
-    uart_rpi_send_frame(CMD_SCAN_DONE, &d, (uint8_t)sizeof(d));
+    (void)uart_rpi_send_frame(CMD_SCAN_DONE, &d, (uint8_t)sizeof(d));
 }
 
 /* 완성된 프레임(buf[0..flen-1]) CRC 검증 후 CMD 디스패치 */
@@ -130,7 +221,6 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
                 struct proto_scan_start ss;
                 /* cppcheck-suppress misra-c2012-21.15 ; 와이어 바이트열→packed 역직렬화(합의 LE) */
                 (void)memcpy(&ss, &buf[PROTO_HEADER_LEN], sizeof(ss));
-                s_scan_count = 0u;              /* 스캔 point 카운터 리셋 */
                 DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
                     ss.pan_start_ddeg, ss.pan_end_ddeg,
                     ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
@@ -148,12 +238,15 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
 
         case CMD_DISARM:
             DBG("  DISARM (스텝 2축 disable)\r\n");
-            scan_stop();                                /* 시퀀스 중단 먼저 */
-            motor_disarm();                             /* → 전류 차단     */
+            /* scan_stop 이 아니라 scan_abort 다 — 전자는 SC_DONE 을 거쳐
+             * 파킹까지 가므로, 전류를 끊은 뒤 유령 이동과 가짜 SCAN_DONE 이
+             * 생긴다(scan_abort 구현부 주석). */
+            scan_abort();                               /* 시퀀스 폐기 먼저 */
+            motor_disarm();                             /* -> 전류 차단     */
             break;
 
         case CMD_PING:
-            uart_rpi_send_frame(CMD_PONG, NULL, 0u);    /* heartbeat 응답 */
+            (void)uart_rpi_send_frame(CMD_PONG, NULL, 0u); /* heartbeat 응답 */
             DBG("  PING -> PONG\r\n");
             break;
 
@@ -224,8 +317,27 @@ void uart_rpi_init(UART_HandleTypeDef *huart)
 void uart_rpi_on_rx_cplt(UART_HandleTypeDef *huart)
 {
     if (huart == s_huart) {
-        s_rb[s_rb_head] = s_rx;                          /* 링버퍼 적재만 */
-        s_rb_head = (uint16_t)((s_rb_head + 1u) & 0xFFu);/* 256 wrap */
+        const uint16_t next = (uint16_t)((s_rb_head + 1u) & 0xFFu);  /* 256 wrap */
+
+        /* 가득 차면 **새 바이트를 버린다**(옛 것을 덮지 않는다).
+         *
+         * 주의: 예전에는 full 검사 없이 그냥 썼다. 두 가지가 문제였다 —
+         *   ① 아직 안 읽은 바이트를 덮는데, 그건 파싱 중인 프레임의 일부일
+         *      수 있어 그 프레임까지 같이 깨진다. 새 것을 버리면 손실이
+         *      뒤쪽에만 남고 파서의 SOF 재동기화가 알아서 복구한다.
+         *   ② 정확히 한 바퀴(256B) 추월하면 head == tail 이 되어 소비자가
+         *      **비어 있는 것으로 오인**한다. 즉 넘쳤다는 사실조차 사라진다.
+         *
+         * 256B 는 하행 프레임 20개분이라 정상 상태에서는 절대 안 찬다.
+         * 차는 경우는 메인루프가 오래 막힌 때뿐이고(엔코더 I2C 재시도 +
+         * 버스 복구, 벤치 도구), 그래서 이 카운터가 곧 **메인루프 블로킹의
+         * 지표**가 된다 — 지금은 그걸 볼 방법이 없다. */
+        if (next != s_rb_tail) {
+            s_rb[s_rb_head] = s_rx;
+            s_rb_head       = next;
+        } else {
+            s_rb_ovf++;
+        }
         (void)HAL_UART_Receive_IT(huart, (uint8_t *)&s_rx, 1u);
     }
 }
