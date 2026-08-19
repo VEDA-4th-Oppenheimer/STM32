@@ -214,6 +214,17 @@ void scan_home(void)
      *   매번 SC_HOMING 으로 되돌아가 정착 대기가 처음부터 다시 시작되고,
      *   결국 CMD_HOMED 를 영영 못 보낸다. */
     if (s.state == SC_IDLE) {
+        /* 홈을 다시 잡는 동안은 "홈이 서 있지 않다" 가 맞다.
+         *
+         * 주의: 이걸 안 내리면 CMD_STATUS(1초 주기)가 이전 홈의 s.homed=true 를
+         *   계속 실어 보낸다. 데몬은 TURRET_HOME ioctl 에서 드라이버 캐시의
+         *   STF_HOMED 를 내리고 "이후 homed==1 은 반드시 이번 HOME 에 대한
+         *   응답" 이라는 불변식에 기대는데, STATUS 가 그 플래그를 되살려
+         *   **홈이 끝나기도 전에 SCAN_START 를 보내게 된다.** 그러면 STM 이
+         *   아직 SC_HOMING 이라 ERR_BUSY 로 거절하고 스캔이 통째로 실패한다
+         *   (실기에서 그렇게 났다 — proto v6 로 STATUS 를 실제로 보내기
+         *   시작하면서 드러난 상호작용이다). */
+        s.homed = false;
         s.state = SC_HOMING;
     }
 }
@@ -334,7 +345,15 @@ bool scan_is_busy(void)
 
 bool scan_is_homed(void)
 {
-    return s.homed;
+    /* 홈 **절차가 끝났을 때만** 참이다. 엔코더 판독만 되고 자세 이동(SC_HOME_POSE)
+     * 이 남아 있으면 거짓이다.
+     *
+     * 주의: 데몬은 이 플래그(STF_HOMED)로 "스캔을 시작해도 되나" 를 판단한다.
+     *   s.homed 는 SC_HOMING 에서 판독이 성공한 순간 참이 되는데, 그걸 그대로
+     *   내보내면 자세 이동이 몇 초 남았는데도 데몬이 SCAN_START 를 보내고
+     *   STM 은 ERR_BUSY 로 거절한다(실기 발생). CMD_HOMED 를 보내는 시점과
+     *   이 플래그가 서는 시점이 같아야 한다. */
+    return s.homed && (s.state != SC_HOMING) && (s.state != SC_HOME_POSE);
 }
 
 uint32_t scan_reject_busy_count(void)
