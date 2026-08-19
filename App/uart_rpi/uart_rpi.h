@@ -41,6 +41,10 @@ uint32_t uart_rpi_tx_fail_count(void);
 /* 수신 링버퍼 오버플로 누적 (진단). 0 이 아니면 메인루프가 오래 막혔다는 뜻. */
 uint32_t uart_rpi_rx_overflow_count(void);
 
+/* CMD_STATUS 주기 송신 (v6). 메인루프에서 매 바퀴 부른다 — 내부에서 주기를 본다. */
+#define STATUS_PERIOD_MS   1000u
+void uart_rpi_status_tick(void);
+
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA, protocol v5):
  *   pan/tilt = 기구각(0.1°, 틸트는 부호), d_mm = 거리.

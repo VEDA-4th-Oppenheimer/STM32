@@ -150,6 +150,7 @@ int main(void)
   while (1) {
 
     uart_rpi_process();                    // 링버퍼 파싱/디스패치 (App/uart_rpi)
+    uart_rpi_status_tick();                // CMD_STATUS 1초 주기 상행 (v6)
     lidar_process();                       // 라이다 샘플 큐 → scan 제출
     scan_process();                        // 스캔 시퀀서 (홈/스윕/엔코더 대조)
     //motor_bench_run();                     // 모터 왕복 테스트 (기본 꺼짐)

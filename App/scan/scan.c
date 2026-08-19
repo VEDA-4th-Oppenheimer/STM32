@@ -71,10 +71,13 @@ static bool scan_settled(void)
 /* ---------------------------------------------------------------------------
  *  보조
  * ------------------------------------------------------------------------- */
-static void scan_report_err(uint8_t code)
+/* v6: 코드는 "무엇이", axis 는 "어디서" 를 말한다. 축과 무관한 오류는
+ * ERR_AXIS_NONE 을 준다. */
+static void scan_report_err(uint8_t code, uint8_t axis)
 {
     struct proto_err e;
     e.code = code;
+    e.axis = axis;
     (void)uart_rpi_send_frame((uint8_t)CMD_ERROR, &e, (uint8_t)sizeof(e));
 }
 
@@ -243,14 +246,15 @@ void scan_start(const struct proto_scan_start *ss)
          *
          * 주의: 오류를 못 올린다 — 프로토콜에 "지금은 못 받는다" 를 뜻하는
          *   코드가 없다. 있는 코드를 빌려 쓰면 나중에 그 코드가 진짜로 났을
-         *   때 오독하게 되므로(§21-5 의 SCAN_HOME_AXIS_PROBE 가 그랬다)
-         *   빌리지 않는다. 대신 카운터로 남겨 CMD_STATUS 에 실을 수 있게 한다.
-         *   다음 프로토콜 개정에서 ERR_BUSY 를 ERR_ENCODER 와 함께 넣을 것. */
+         *   때 오독하게 되므로 v5 까지는 카운터로만 남겼다. v6 에서 ERR_BUSY 가
+         *   생겨 이제 사유를 그대로 올린다. 카운터는 누적 진단으로 유지한다
+         *   (CMD_STATUS 에 실린다). */
         s.reject_busy++;
+        scan_report_err((uint8_t)ERR_BUSY, (uint8_t)ERR_AXIS_NONE);
     } else if (!s.homed) {
-        scan_report_err((uint8_t)ERR_NOT_HOMED);
+        scan_report_err((uint8_t)ERR_NOT_HOMED, (uint8_t)ERR_AXIS_NONE);
     } else if (!scan_request_in_range(ss)) {
-        scan_report_err((uint8_t)ERR_OUT_OF_RANGE);
+        scan_report_err((uint8_t)ERR_OUT_OF_RANGE, (uint8_t)ERR_AXIS_NONE);
     } else {
         int32_t span;
 
@@ -326,6 +330,16 @@ void scan_abort(void)
 bool scan_is_busy(void)
 {
     return (s.state != SC_IDLE);
+}
+
+bool scan_is_homed(void)
+{
+    return s.homed;
+}
+
+uint32_t scan_reject_busy_count(void)
+{
+    return s.reject_busy;
 }
 
 scan_state_t scan_get_state(void)
@@ -418,28 +432,14 @@ static void scan_do_homing(void)
          * 없기도 하고, 홈이 실패한 뒤의 상태가 정확히 "홈 안 된 상태" 라
          * 의미가 맞는다. 이 상태에서 SCAN_START 가 오면 같은 코드로 거절된다. */
         s.homed = false;
-#if SCAN_HOME_AXIS_PROBE
-        /*  브링업 전용. scan.h SCAN_HOME_AXIS_PROBE 주석 참조.
-         *   주의: 여기서 쓰는 ERR_OUT_OF_RANGE / ERR_LIDAR 는 **본래 의미가 아니다.**
-         *     축을 가리려고 잠시 빌려 쓰는 것이고, 프로브를 끄면 전부
-         *     ERR_NOT_HOMED 로 돌아간다. 로그를 나중에 다시 볼 때 오해하지 말 것.
-         *
-         *   주의: 처음엔 팬에 ERR_STALL(5) 을 썼는데 **홈 수렴 실패가 이미 그
-         *     코드를 쓴다**(scan_do_home_pose). 그래서 5 를 받아도 "엔코더가
-         *     안 읽힌다" 인지 "읽히는데 수렴을 못 한다" 인지 구분이 안 됐다.
-         *     겹치지 않는 4(ERR_OUT_OF_RANGE — scan_start 에서만 나온다)로 옮겼다.
-         *     빌려 쓸 코드를 고를 때는 그 코드가 같은 구간에서 나올 수 있는지를
-         *     먼저 봐야 한다. */
-        if (!pan_ok && !tilt_ok) {
-            scan_report_err((uint8_t)ERR_NOT_HOMED);     /* 3 = 양축 실패  */
-        } else if (!pan_ok) {
-            scan_report_err((uint8_t)ERR_OUT_OF_RANGE);  /* 4 = 팬만 실패  */
-        } else {
-            scan_report_err((uint8_t)ERR_LIDAR);         /* 6 = 틸트만 실패 */
-        }
-#else
-        scan_report_err((uint8_t)ERR_NOT_HOMED);
-#endif
+        /* v6: 축을 프로토콜이 나른다. 예전에는 축 필드가 없어 다른 오류코드를
+         * 빌려 표시했는데(SCAN_HOME_AXIS_PROBE: 4=팬 / 6=틸트), 빌린 코드는
+         * 그 코드가 진짜로 났을 때 오독을 부른다. 이제 코드는 ERR_ENCODER 로
+         * 고정하고 어느 축인지는 axis 가 말한다. */
+        const uint8_t axis = (uint8_t)((pan_ok  ? 0u : (uint8_t)ERR_AXIS_PAN)
+                                     | (tilt_ok ? 0u : (uint8_t)ERR_AXIS_TILT));
+
+        scan_report_err((uint8_t)ERR_ENCODER, axis);
         s.state = SC_IDLE;
     }
 #endif /* SCAN_NO_ENCODER */
@@ -509,18 +509,24 @@ static void scan_do_home_pose(void)
         if (!ok_t || !ok_p) {
             /* 재시도를 다 쓰도록 자세를 확인하지 못했다. TOL 판정에서 그 축을
              * 빼고 "괜찮다" 로 넘기면 검증 안 된 원점으로 스캔이 돌아간다.
-             * ERR_STALL 이 아니라 ERR_NOT_HOMED 다 — 수렴을 못 한 것이 아니라
-             * 홈이 서지 않은 것이다. */
+             * v6: 판독 실패이므로 ERR_ENCODER 이고, 어느 축인지는 axis 가
+             * 말한다(예전에는 ERR_NOT_HOMED 로 뭉뚱그렸다). */
+            /* 축 값이 비트 플래그라 OR 로 합쳐진다(protocol.h 주석 참조).
+             * 삼항 중첩보다 짧고, "둘 다 실패" 를 따로 안 써도 된다. */
+            const uint8_t ax = (uint8_t)((ok_p ? 0u : (uint8_t)ERR_AXIS_PAN)
+                                       | (ok_t ? 0u : (uint8_t)ERR_AXIS_TILT));
             s.home_retry = 0u;
             s.homed      = false;
-            scan_report_err((uint8_t)ERR_NOT_HOMED);
+            scan_report_err((uint8_t)ERR_ENCODER, ax);
             s.state = SC_IDLE;
         } else if (too_far) {
             /* 통지만 안 하면 데몬이 HOME_TIMEOUT 까지 기다리다 취소하는데,
              * 그러면 원인이 "무응답" 으로 보여 오해를 부른다. 명시적으로 알린다. */
             s.home_retry = 0u;
             s.homed      = false;
-            scan_report_err((uint8_t)ERR_STALL);
+            scan_report_err((uint8_t)ERR_STALL,
+                            (scan_abs32(ep) > SCAN_HOME_TOL_DDEG)
+                                ? (uint8_t)ERR_AXIS_PAN : (uint8_t)ERR_AXIS_TILT);
             s.state = SC_IDLE;
         } else {
             scan_home_finish();

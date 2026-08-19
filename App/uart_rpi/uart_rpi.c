@@ -13,7 +13,8 @@
  * ==========================================================================*/
 #include "uart_rpi.h"
 #include "motor.h"        /* CMD_DISARM → motor_disarm            */
-#include "scan.h"         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
+#include "scan.h"
+#include "lidar.h"      /* 큐 drop 카운터 (CMD_STATUS) */         /* HOME/SCAN_START/STOP → 스캔 시퀀서    */
 #include <string.h>
 
 /* ---- 디버그 트레이스 -------------------------------------------------------
@@ -105,6 +106,56 @@ uint32_t uart_rpi_tx_fail_count(void)
 uint32_t uart_rpi_rx_overflow_count(void)
 {
     return s_rb_ovf;
+}
+
+/* u32 카운터를 u16 필드로 줄인다. 포화시켜 "많다" 를 보존한다 — 잘라내면
+ * 65536 번째에 0 으로 보여 오히려 정상처럼 읽힌다. */
+static proto_u16 sat16(uint32_t v)
+{
+    return (v > 0xFFFFu) ? (proto_u16)0xFFFFu : (proto_u16)v;
+}
+
+/* CMD_STATUS 주기 송신 (v6).
+ *
+ * 핵심: v5 까지 이 프레임은 정의만 있고 한 번도 보내지지 않았다. 그래서
+ *   드라이버의 STF_HOMED 는 CMD_HOMED 때 서기만 하고 내려갈 일이 없었고,
+ *   STM 을 리셋/재플래시하면 STM 은 홈이 풀렸는데 캐시만 참으로 남았다.
+ *   이제 1초마다 진실을 보낸다.
+ *
+ * 주기를 1초로 잡은 이유: 각도는 이미 SCAN_DATA 에 실려 오고 카운터는 천천히
+ *   변한다. 프레임 20B x 1Hz = UART 0.17% 라 스캔(20%)에 영향이 없다.
+ *   100ms 로 하면 1.7% 로 여전히 무해하지만 얻는 것이 없다. */
+void uart_rpi_status_tick(void)
+{
+    static uint32_t s_last_ms = 0u;
+    const uint32_t now = HAL_GetTick();
+
+    /* 부호 없는 뺄셈이라 HAL_GetTick 이 49일 만에 한 바퀴 돌아도 안전하다. */
+    if ((now - s_last_ms) >= STATUS_PERIOD_MS) {
+        struct proto_status st;
+        uint8_t flags = 0u;
+
+        s_last_ms = now;
+
+        if (scan_is_homed()) {
+            flags |= (uint8_t)STF_HOMED;
+        }
+        if (scan_is_busy()) {
+            flags |= (uint8_t)STF_SCANNING;
+        }
+
+        st.cur_pan_ddeg  = (proto_s16)motor_pulse_to_ddeg(motor_get_pulse(MOTOR_AXIS_PAN));
+        st.cur_tilt_ddeg = (proto_s16)motor_pulse_to_ddeg(motor_get_pulse(MOTOR_AXIS_TILT));
+        st.flags         = flags;
+        st.tx_fail       = sat16(s_tx_fail);
+        st.rx_ovf        = sat16(s_rb_ovf);
+        st.enc_retry     = sat16(motor_encoder_retry_count(MOTOR_AXIS_PAN)
+                               + motor_encoder_retry_count(MOTOR_AXIS_TILT));
+        st.lidar_drop    = sat16(lidar_get_queue_drops());
+        st.reject_busy   = sat16(scan_reject_busy_count());
+
+        (void)uart_rpi_send_frame((uint8_t)CMD_STATUS, &st, (uint8_t)sizeof(st));
+    }
 }
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가.
