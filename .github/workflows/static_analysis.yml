@@ -6,11 +6,10 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+  # PR 쪽에는 paths-ignore 를 두지 않는다. firmware-analysis 가 필수 상태 체크라,
+  # 스킵되면 GitHub 이 "보고 대기" 로 남겨 문서 전용 PR 이 영구히 머지 불가가 된다.
   pull_request:
     branches: [ main ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
 
 jobs:
   # ── STM32 펌웨어 정적분석 : arm 툴체인 + compile_commands 기반 cppcheck ──
@@ -25,6 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cppcheck cmake ninja-build gcc-arm-none-eabi
+          cppcheck --version   # 러너의 cppcheck 버전 기록 (apt 무버전 설치라 이미지 따라 바뀜)
 
       - name: Firmware cppcheck (Core/Src, -D__GNUC__, --error-exitcode=1)
         run: bash tools/run_static_analysis.sh

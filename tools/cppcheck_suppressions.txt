@@ -41,7 +41,7 @@ misra-c2012-20.1:*shared/protocol.h
 #   게이트 정책 A = Required/Mandatory 만 차단, Advisory 는 리포트만.
 #   cppcheck misra 애드온에 등급 필터가 없어, 실제로 뜨는 Advisory 룰을
 #   근거를 달아 개별 등록한다. 폴더 통째 억제(`*:*App/motor/*`)로 돌아가지 말 것.
-#
+# ---
 #   11.4 (포인터 <-> 정수 변환, Advisory)
 #     원인: ST HAL 의 페리페럴 베이스가 `#define GPIOB ((GPIO_TypeDef*)GPIOB_BASE)`
 #           형태라, GPIO/TIM/I2C 를 쓰는 모든 코드에서 구조적으로 발생한다.
@@ -49,14 +49,14 @@ misra-c2012-20.1:*shared/protocol.h
 #           계층이므로 deviation 으로 수용한다. (MISRA Compliance:2020 의
 #           adopted code / 하드웨어 접근 예외에 해당)
 misra-c2012-11.4:*App/*
-#
+# ---
 #   8.7 (단일 TU 에서만 참조되는 외부 링키지, Advisory)
 #     원인: 모듈의 공개 API 를 cppcheck 가 "한 파일에서만 쓴다" 고 본다.
 #           호출자가 아직 없는 계층(App/scan 미착수)일수록 전부 걸린다.
 #     판단: 모듈 경계를 헤더로 노출하는 것이 이 프로젝트의 구조라 오탐이다.
 #           static 으로 바꾸면 계층 분리가 깨진다.
 misra-c2012-8.7:*App/*
-#
+# ---
 #   21.6 (표준 I/O 함수 금지, Required) — 파일 1개 한정 deviation
 #     대상: App/hallEffectSensor/encoder_bench.c
 #     원인: 이 파일은 엔코더 벤치 브링업 도구다. 사람이 VCP 로 값을 읽는 것이
@@ -66,14 +66,14 @@ misra-c2012-8.7:*App/*
 #           멈추지 않도록 파일·룰 한정으로 억제한다(폴더 통째 억제 아님).
 #           기구 브링업이 끝나면 이 파일과 함께 이 줄도 지운다.
 misra-c2012-21.6:*App/hallEffectSensor/encoder_bench.c
-#
+# ---
 #   2.5 (미사용 매크로, Advisory) — 같은 파일 한정
 #     원인: ENCODER_BENCH_TEST 로 켜고 끄는 파일이라, cppcheck 가 두 구성을
 #           모두 훑으면 한쪽 구성에서는 매크로가 반드시 미사용으로 남는다.
 #           shared/protocol.h 를 2.5 에서 뺀 것과 같은 성격이다.
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.c
 misra-c2012-2.5:*App/hallEffectSensor/encoder_bench.h
-#
+# ---
 # --- App/motor/motor_bench.{c,h}, App/lidar/lidar_bench.{c,h}, App/bench_common.h
 #   encoder_bench 와 동일한 성격의 브링업 전용 도구. 각 TEST 플래그로 켜고 끄며
 #   꺼진 구성에서는 매크로가 미사용으로 남고, printf 는 사람이 읽는 것이 목적이다.
@@ -86,3 +86,19 @@ misra-c2012-21.6:*App/lidar/lidar_bench.c
 misra-c2012-2.5:*App/lidar/lidar_bench.c
 misra-c2012-2.5:*App/lidar/lidar_bench.h
 misra-c2012-2.5:*App/bench_common.h
+
+# --- 7. cppcheck 2.13.0 오탐 (2026-08-05) ---
+#   ※ 구분선에 '#' 단독 줄을 쓰지 말 것. 2.13 파서는 길이 2 이상일 때만 주석으로
+#     보므로 '#' 한 글자는 규칙으로 파싱돼 "Failed to add suppression. No id" 가 된다.
+# ---
+#   11.8 (pointed-to 자격 제거, Required) — motor.c 한정, 오탐 억제
+#     대상: HAL_GPIO_WritePin 호출 8곳 (74/82/84/96/98, 211/219/221)
+#     근거: s_cfg 가 static const 라 멤버 lvalue 는 GPIO_TypeDef *const 지만,
+#           값을 읽으면 top-level const 는 사라져 GPIO_TypeDef * 가 된다.
+#           HAL 파라미터도 GPIO_TypeDef * — 가리키는 타입은 양쪽 다 무자격이라
+#           제거되는 자격이 없다. 11.8 은 pointed-to 자격만 다루는 룰이다.
+#     확인: CI 2.13.0 은 8건 지적, cppcheck 2.21 은 0건(11.8 검사 자체는 활성 —
+#           진짜 위반인 (char*)cp 는 잡는다). 버전만 다른데 결과가 갈린다.
+#     해제: CI cppcheck 가 2.14 이상이 되면 이 줄을 지운다.
+#           (noble apt 는 2.13.0 뿐 — 버전 고정 방식은 별도 과제)
+misra-c2012-11.8:*App/motor/motor.c
