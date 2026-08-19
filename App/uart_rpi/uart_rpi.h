@@ -32,8 +32,14 @@ void uart_rpi_process(void);
  * 실제 수신 수보다 커진다(구현부 주석). */
 bool uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
 
+/* 스캔 점 카운터 리셋 — scan_start 가 요청을 승인한 뒤에만 부른다. */
+void uart_rpi_reset_scan_count(void);
+
 /* 송신 실패 누적 (진단). */
 uint32_t uart_rpi_tx_fail_count(void);
+
+/* 수신 링버퍼 오버플로 누적 (진단). 0 이 아니면 메인루프가 오래 막혔다는 뜻. */
+uint32_t uart_rpi_rx_overflow_count(void);
 
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA, protocol v5):

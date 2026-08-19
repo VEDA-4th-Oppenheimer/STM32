@@ -43,6 +43,7 @@ static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
 static uint32_t s_scan_count = 0; /* SCAN 시작할 때 point count 초기화 */
 static uint32_t s_tx_fail   = 0u; /* 송신 실패 누적 (진단용)              */
+static volatile uint32_t s_rb_ovf = 0u; /* 수신 링버퍼 오버플로 (진단)    */
 
 /* protocol.h 프레임 빌드 -> USART1 TX 전송 (상행).
  *
@@ -86,10 +87,24 @@ bool uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
     return ok;
 }
 
+/* 스캔 점 카운터를 0 으로. **요청이 받아들여진 뒤에** 부를 것 — 디스패처에서
+ * 먼저 밀면 거절된 요청이 진행 중인 스캔의 집계를 지운다. */
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — App/scan 이 호출 */
+void uart_rpi_reset_scan_count(void)
+{
+    s_scan_count = 0u;
+}
+
 /* cppcheck-suppress misra-c2012-8.7 ; 공개 API — 진단 경로에서 호출 */
 uint32_t uart_rpi_tx_fail_count(void)
 {
     return s_tx_fail;
+}
+
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — 진단 경로에서 호출 */
+uint32_t uart_rpi_rx_overflow_count(void)
+{
+    return s_rb_ovf;
 }
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가.
@@ -155,7 +170,6 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
                 struct proto_scan_start ss;
                 /* cppcheck-suppress misra-c2012-21.15 ; 와이어 바이트열→packed 역직렬화(합의 LE) */
                 (void)memcpy(&ss, &buf[PROTO_HEADER_LEN], sizeof(ss));
-                s_scan_count = 0u;              /* 스캔 point 카운터 리셋 */
                 DBG("  SCAN_START pan[%d..%d] tilt[%d..%d] step=%u\r\n",
                     ss.pan_start_ddeg, ss.pan_end_ddeg,
                     ss.tilt_start_ddeg, ss.tilt_end_ddeg, ss.step_ddeg);
@@ -252,8 +266,27 @@ void uart_rpi_init(UART_HandleTypeDef *huart)
 void uart_rpi_on_rx_cplt(UART_HandleTypeDef *huart)
 {
     if (huart == s_huart) {
-        s_rb[s_rb_head] = s_rx;                          /* 링버퍼 적재만 */
-        s_rb_head = (uint16_t)((s_rb_head + 1u) & 0xFFu);/* 256 wrap */
+        const uint16_t next = (uint16_t)((s_rb_head + 1u) & 0xFFu);  /* 256 wrap */
+
+        /* 가득 차면 **새 바이트를 버린다**(옛 것을 덮지 않는다).
+         *
+         * 주의: 예전에는 full 검사 없이 그냥 썼다. 두 가지가 문제였다 —
+         *   ① 아직 안 읽은 바이트를 덮는데, 그건 파싱 중인 프레임의 일부일
+         *      수 있어 그 프레임까지 같이 깨진다. 새 것을 버리면 손실이
+         *      뒤쪽에만 남고 파서의 SOF 재동기화가 알아서 복구한다.
+         *   ② 정확히 한 바퀴(256B) 추월하면 head == tail 이 되어 소비자가
+         *      **비어 있는 것으로 오인**한다. 즉 넘쳤다는 사실조차 사라진다.
+         *
+         * 256B 는 하행 프레임 20개분이라 정상 상태에서는 절대 안 찬다.
+         * 차는 경우는 메인루프가 오래 막힌 때뿐이고(엔코더 I2C 재시도 +
+         * 버스 복구, 벤치 도구), 그래서 이 카운터가 곧 **메인루프 블로킹의
+         * 지표**가 된다 — 지금은 그걸 볼 방법이 없다. */
+        if (next != s_rb_tail) {
+            s_rb[s_rb_head] = s_rx;
+            s_rb_head       = next;
+        } else {
+            s_rb_ovf++;
+        }
         (void)HAL_UART_Receive_IT(huart, (uint8_t *)&s_rx, 1u);
     }
 }

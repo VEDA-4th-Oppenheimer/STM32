@@ -31,6 +31,9 @@ static struct {
     /* 홈 자세 보정 재시도 횟수 (수렴 못 하면 ERR_STALL) */
     uint8_t  home_retry;
 
+    /* 진행 중이라 거절한 SCAN_START 수 (진단 — 프로토콜에 ERR_BUSY 가 없다) */
+    uint32_t reject_busy;
+
     /* 홈 판독 결과. CMD_HOMED 를 홈 자세 이동이 **끝난 뒤에** 보내야 해서
      * 상태를 넘어 들고 가야 한다 (아래 SC_HOME_POSE 주석 참조). */
     struct proto_homed home;
@@ -143,12 +146,28 @@ static int32_t scan_encoder_error_ddeg(motor_axis_t ax, bool *ok,
  * 보정 방식은 "실측을 진실로 삼고 절대 목표 0 을 다시 준다" 이다. 남은 오차만큼
  * 상대 이동을 주는 것보다 안전한데, 스텝카운트가 실측과 어긋난 채 남으면 이후
  * 모든 절대각 계산이 그 오차를 안고 가기 때문이다. */
-static bool scan_home_axis_settled(motor_axis_t ax)
+/* 홈 자세 재검증 결과.
+ *
+ * 주의: 예전에는 bool 하나였고 **판독 실패를 SETTLED 로 접었다.** 그래서
+ *   한 축의 I2C 가 죽어도 다른 축만 수렴하면 `true && true` 가 되어 검증
+ *   없이 CMD_HOMED 가 나갔다. 축마다 I2C 버스가 분리돼 있어(Pan=I2C3 /
+ *   Tilt=I2C1) **한쪽만 죽는 것이 오히려 흔한 시나리오**다 — 실제로 겪은
+ *   고장이 전부 그랬다(§18-1 틸트 SDA 단락, §18-4 팬 I2C 미복구).
+ *
+ *   무한 재시도를 안 한다는 원래 판단은 유지한다(축당 100ms 씩 태우며 영영
+ *   안 끝난다). 대신 재시도를 다 쓰면 ERR_NOT_HOMED 로 정직하게 끝낸다. */
+typedef enum {
+    HOME_SETTLED = 0,   /* 판독 성공 + 허용 오차 안         */
+    HOME_ADJUSTING,     /* 판독 성공 + 아직 멀다 (보정 중)  */
+    HOME_UNREADABLE     /* 판독 실패 — 자세를 확인하지 못함 */
+} home_check_t;
+
+static home_check_t scan_home_axis_settled(motor_axis_t ax)
 {
     bool ok;
     int32_t enc_pulse = 0;
     const int32_t err = scan_encoder_error_ddeg(ax, &ok, &enc_pulse);
-    bool done = true;
+    home_check_t r = HOME_UNREADABLE;
 
     if (ok) {
         /* 실측을 카운트에 반영 — 수렴했든 아니든 항상. */
@@ -156,13 +175,12 @@ static bool scan_home_axis_settled(motor_axis_t ax)
 
         if (scan_abs32(err) > SCAN_HOME_FINE_DDEG) {
             motor_set_target(ax, 0);   /* 아직 머니 한 번 더 당긴다 */
-            done = false;
+            r = HOME_ADJUSTING;
+        } else {
+            r = HOME_SETTLED;
         }
     }
-    /* 판독 실패는 done=true 로 통과시킨다. 여기서 무한 재시도하면 축당
-     * 100ms 씩 태우며 영영 안 끝난다 — 판독이 아예 안 되면 홈 자체가 이미
-     * scan_do_homing 에서 ERR_NOT_HOMED 로 걸렸을 것이다. */
-    return done;
+    return r;
 }
 
 /* ---------------------------------------------------------------------------
@@ -197,16 +215,49 @@ void scan_home(void)
     }
 }
 
+/* 각도 요청이 프로토콜 범위 안인가.
+ *
+ * 주의: 데몬과 드라이버가 각각 같은 검사를 하지만 여기서도 본다. 세 곳 중
+ *   어느 하나가 뚫리면 그 결과가 곧바로 모터 목표가 되기 때문이다. 특히
+ *   pan 범위를 벗어나면 아래 span 계산의 +3600 보정으로도 음수가 남아
+ *   uint32_t 로 접히면서 n_lines 가 수십억이 된다. */
+static bool scan_request_in_range(const struct proto_scan_start *ss)
+{
+    return (ss->pan_start_ddeg  >= PAN_MIN)  && (ss->pan_start_ddeg  <= PAN_MAX)
+        && (ss->pan_end_ddeg    >= PAN_MIN)  && (ss->pan_end_ddeg    <= PAN_MAX)
+        && (ss->tilt_start_ddeg >= TILT_MIN) && (ss->tilt_start_ddeg <= TILT_MAX)
+        && (ss->tilt_end_ddeg   >= TILT_MIN) && (ss->tilt_end_ddeg   <= TILT_MAX)
+        && (ss->step_ddeg > 0u) && (ss->step_ddeg <= 3600u);
+}
+
 void scan_start(const struct proto_scan_start *ss)
 {
     if (ss == NULL) {
         /* 방어 — 디스패처가 크기를 검사하므로 정상 경로에서는 오지 않는다 */
+    } else if (s.state != SC_IDLE) {
+        /* 이미 스캔·홈·파킹 중이다. 요청을 **버린다**(덮어쓰지 않는다).
+         *
+         * 예전에는 상태를 안 보고 파라미터를 통째로 갈아끼웠다. 진행 중인
+         * 스윕이 그 자리에서 새 범위로 바뀌는데, 산출물은 이미 옛 격자로
+         * 절반쯤 채워져 있어 두 스캔이 한 파일에 섞인다.
+         *
+         * 주의: 오류를 못 올린다 — 프로토콜에 "지금은 못 받는다" 를 뜻하는
+         *   코드가 없다. 있는 코드를 빌려 쓰면 나중에 그 코드가 진짜로 났을
+         *   때 오독하게 되므로(§21-5 의 SCAN_HOME_AXIS_PROBE 가 그랬다)
+         *   빌리지 않는다. 대신 카운터로 남겨 CMD_STATUS 에 실을 수 있게 한다.
+         *   다음 프로토콜 개정에서 ERR_BUSY 를 ERR_ENCODER 와 함께 넣을 것. */
+        s.reject_busy++;
     } else if (!s.homed) {
         scan_report_err((uint8_t)ERR_NOT_HOMED);
-    } else if (ss->step_ddeg == 0u) {
+    } else if (!scan_request_in_range(ss)) {
         scan_report_err((uint8_t)ERR_OUT_OF_RANGE);
     } else {
         int32_t span;
+
+        /* 카운터는 **요청이 받아들여진 뒤에** 민다. 디스패처에서 먼저 밀면
+         * 거절된 요청 하나가 진행 중인 스캔의 점 수를 0 으로 지워, SCAN_DONE
+         * 의 point_count 가 실제보다 작게 나간다. */
+        uart_rpi_reset_scan_count();
 
         s.pan_start_ddeg  = ss->pan_start_ddeg;
         s.pan_end_ddeg    = ss->pan_end_ddeg;
@@ -430,10 +481,12 @@ static void scan_do_home_pose(void)
     /* 양축을 각각 대조한다. || 로 단락시키지 않고 둘 다 호출하는 이유는,
      * 한쪽이 어긋났다고 다른 쪽 보정을 건너뛰면 축마다 번갈아 한 번씩만
      * 움직이게 되어 수렴이 느려지기 때문이다. */
-    const bool tilt_ok = scan_home_axis_settled(MOTOR_AXIS_TILT);
-    const bool pan_ok  = scan_home_axis_settled(MOTOR_AXIS_PAN);
+    const home_check_t tilt_r = scan_home_axis_settled(MOTOR_AXIS_TILT);
+    const home_check_t pan_r  = scan_home_axis_settled(MOTOR_AXIS_PAN);
+    const bool unreadable = (tilt_r == HOME_UNREADABLE)
+                         || (pan_r  == HOME_UNREADABLE);
 
-    if (tilt_ok && pan_ok) {
+    if (!unreadable && (tilt_r == HOME_SETTLED) && (pan_r == HOME_SETTLED)) {
         scan_home_finish();                 /* FINE 안에 수렴 */
     } else if (s.home_retry < SCAN_HOME_MAX_RETRY) {
         /* 보정 이동이 걸려 있다. 상태를 유지하면 다음 바퀴에 !idle 로 보여
@@ -453,7 +506,16 @@ static void scan_do_home_pose(void)
         const bool too_far = (ok_t && (scan_abs32(et) > SCAN_HOME_TOL_DDEG))
                           || (ok_p && (scan_abs32(ep) > SCAN_HOME_TOL_DDEG));
 
-        if (too_far) {
+        if (!ok_t || !ok_p) {
+            /* 재시도를 다 쓰도록 자세를 확인하지 못했다. TOL 판정에서 그 축을
+             * 빼고 "괜찮다" 로 넘기면 검증 안 된 원점으로 스캔이 돌아간다.
+             * ERR_STALL 이 아니라 ERR_NOT_HOMED 다 — 수렴을 못 한 것이 아니라
+             * 홈이 서지 않은 것이다. */
+            s.home_retry = 0u;
+            s.homed      = false;
+            scan_report_err((uint8_t)ERR_NOT_HOMED);
+            s.state = SC_IDLE;
+        } else if (too_far) {
             /* 통지만 안 하면 데몬이 HOME_TIMEOUT 까지 기다리다 취소하는데,
              * 그러면 원인이 "무응답" 으로 보여 오해를 부른다. 명시적으로 알린다. */
             s.home_retry = 0u;
