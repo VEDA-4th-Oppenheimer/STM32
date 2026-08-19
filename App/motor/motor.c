@@ -16,7 +16,7 @@ extern I2C_HandleTypeDef hi2c1;   /* Tilt : PB8/PB9  */
  *  축 배선 테이블 (컴파일타임 상수)
  *
  *  dir_forward = "현재 < 목표" 일 때 DIR 에 내보낼 레벨.
- *  ⚠️ 실측으로 정한 값이다. 원 구현 주석 기준:
+ *  주의: 실측으로 정한 값이다. 원 구현 주석 기준:
  *     홈 수행 시 소프트웨어는 0 으로 수렴했다고 판단했는데 엔코더 실측은
  *     반대로 갔다 — 즉 초기 배치가 뒤집혀 있어 극성을 반전한 결과다.
  *     배선을 바꾸지 않는 한 이 값을 임의로 뒤집지 말 것.
@@ -33,10 +33,10 @@ struct axis_cfg {
     uint32_t      cruise_pps;
     uint32_t      accel_pps2;
     GPIO_PinState dir_forward;
-    /* ★ 엔코더 방향. "펄스 카운트가 증가할 때 엔코더 각도가 증가하면 +1,
+    /* 핵심: 엔코더 방향. "펄스 카운트가 증가할 때 엔코더 각도가 증가하면 +1,
      *   감소하면 -1" 이다.
      *
-     *   ⚠️ dir_forward 와 **반드시 짝으로** 다뤄야 한다. dir_forward 를
+     *   주의: dir_forward 와 **반드시 짝으로** 다뤄야 한다. dir_forward 를
      *     뒤집으면 "카운트 증가" 가 반대 물리 방향을 뜻하게 되는데, 엔코더는
      *     그대로이므로 이 부호도 같이 뒤집어야 한다. 하나만 바꾸면
      *     motor_encoder_deg_to_pulse() 가 반대 부호를 내놓고, 홈 폐루프가
@@ -56,7 +56,7 @@ static const struct axis_cfg s_cfg[MOTOR_AXIS_COUNT] = {
         .tim        = TIM1,
         .cruise_pps = MOTOR_PAN_CRUISE_PPS,
         .accel_pps2 = MOTOR_PAN_ACCEL_PPS2,
-        /* ⚠️ 2026-08-10 반전. 배선 정리 후 케이블 여유가 **반대 방향**으로
+        /* 주의: 2026-08-10 반전. 배선 정리 후 케이블 여유가 **반대 방향**으로
          *   잡혀서, 종전 방향으로 돌리면 선이 당겨져 뽑힌다.
          *   dir_forward 를 뒤집었으므로 enc_sign 도 같이 뒤집는다(위 주석). */
         .dir_forward = GPIO_PIN_SET,
@@ -121,7 +121,7 @@ static struct axis_rt s_rt[MOTOR_AXIS_COUNT];
 
 /* 속도를 바꾸고 그 결과를 타이머에 싣는다.
  *
- * ⚠️ ARR 프리로드는 비활성(CubeMX 설정)이라 쓰는 즉시 이번 주기에 반영된다.
+ * 주의: ARR 프리로드는 비활성(CubeMX 설정)이라 쓰는 즉시 이번 주기에 반영된다.
  *   이 함수는 ISR 진입 직후에만 불리므로 CNT 는 수 us 이고, 새 ARR 은 최소
  *   c_min(순항 간격 = 틸트 2500us) 이라 언제나 CNT 보다 크다. 만약 CNT 보다
  *   작은 값을 쓰면 카운터가 0xFFFF 까지 돌아 그 주기만 통째로 길어진다. */
@@ -200,7 +200,7 @@ static void axis_ramp(motor_axis_t ax, int32_t remaining)
  * ------------------------------------------------------------------------- */
 /* 스텝 타이머의 시간축을 이 계층이 직접 잡는다.
  *
- * ★ CubeMX 가 MX_TIMx_Init 에 넣어 둔 Prescaler/Period 를 **쓰지 않는다.**
+ * 핵심: CubeMX 가 MX_TIMx_Init 에 넣어 둔 Prescaler/Period 를 **쓰지 않는다.**
  *   램프 계산이 "1틱 = 1us" 를 전제로 하는데, .ioc 를 다시 생성하면서 그 값이
  *   바뀌면 축 속도가 통째로 배수만큼 어긋난다. 생성 코드가 어떤 값을 들고
  *   있든 결과가 같도록 여기서 확정한다.
@@ -209,7 +209,7 @@ static void axis_ramp(motor_axis_t ax, int32_t remaining)
  *   APB 프리스케일러가 1 이면 그대로고, 2 이상이면 타이머 쪽에서 2배로
  *   보상되어 84MHz 로 같아진다(현 클럭트리: APB1=/2, APB2=/1).
  *
- * ⚠️ HAL_TIM_Base_Start_IT() 보다 먼저 불려야 한다(main.c 는 그렇게 부른다). */
+ * 주의: HAL_TIM_Base_Start_IT() 보다 먼저 불려야 한다(main.c 는 그렇게 부른다). */
 static void axis_timer_init(motor_axis_t ax)
 {
     TIM_TypeDef *tim = s_cfg[ax].tim;
@@ -321,20 +321,20 @@ I2C_HandleTypeDef *motor_axis_i2c(motor_axis_t ax)
 
 /* 엔코더 판독 1회. 실패하면 페리페럴을 되살리고 다시 시도한다.
  *
- * ★ 재시도가 **여기** 있는 이유 (2026-08-12):
+ * 핵심: 재시도가 **여기** 있는 이유 (2026-08-12):
  *   예전에는 재시도가 motor_read_encoder_pulse 에만 있었고, 정작 홈
  *   (scan_do_homing)은 재시도 없는 이 함수를 썼다. 그래서 I2C 가 **한 번**
  *   튀면 그대로 ERR 로 확정돼 스캔이 시작조차 못 했다. 두 경로가 같은
  *   신뢰도를 갖도록 재시도를 아래층으로 내렸다.
  *
- * ★ 재시도 사이에 Encoder_BusRecover 를 부르는 이유:
+ * 핵심: 재시도 사이에 Encoder_BusRecover 를 부르는 이유:
  *   HAL 이 타임아웃/NACK 뒤 상태를 래치해서, 되살리지 않으면 이어지는
  *   시도가 전부 즉시 HAL_BUSY 로 튕긴다 — 재시도가 무의미해진다.
  *   실기 증상: DISARM 뒤 홈을 걸면 안 읽히고 STM32 를 리셋해야 돌아왔다.
  *   NRST(전원 유지) 만으로 복구된 것이 "슬레이브가 아니라 STM32 쪽 상태"
  *   라는 근거다.
  *
- * ⚠️ 몇 번 만에 성공했는지 세어 둔다(motor_encoder_retry_count). 재시도가
+ * 주의: 몇 번 만에 성공했는지 세어 둔다(motor_encoder_retry_count). 재시도가
  *   조용히 성공하면 배선이 나빠지는 것을 아무도 모른 채 지나가기 때문이다 —
  *   복구가 문제를 가리는 것을 막으려면 횟수가 보여야 한다. */
 static uint32_t s_enc_retry_total[MOTOR_AXIS_COUNT];
@@ -374,7 +374,7 @@ int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
     float rel = deg - ((ax < MOTOR_AXIS_COUNT)
                        ? s_cfg[ax].zero_offset_deg : 0.0f);
 
-    /* ⚠️ 엔코더는 0~360 순환이라 뺄셈만 하면 한 바퀴 경계에서 터진다.
+    /* 주의: 엔코더는 0~360 순환이라 뺄셈만 하면 한 바퀴 경계에서 터진다.
      *   예) 틸트 영점이 313.5도일 때 기구각 +90도의 실측은 403.5 가 아니라
      *       43.5 로 읽힌다. 그대로 빼면 -270 이 나와 ERR_STALL 이나 엉뚱한
      *       재영점으로 이어진다. -180..+180 으로 접어 가장 가까운 해를 쓴다.
@@ -390,7 +390,7 @@ int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
     /* 엔코더 방향 반영 (위 enc_sign 주석 참조) */
     rel *= (float)sign;
 
-    /* ⚠️ 버림이 아니라 반올림. (int32_t) 캐스트는 0 방향 절삭이라 최대 1펄스
+    /* 주의: 버림이 아니라 반올림. (int32_t) 캐스트는 0 방향 절삭이라 최대 1펄스
      *   (0.1125도) 오차에 **한쪽으로 치우친 편향**까지 생긴다. 반올림하면
      *   최대 0.5펄스(0.056도)로 절반이 되고 편향도 사라진다 — 홈 정확도가
      *   그만큼 좋아진다. ddeg<->pulse 변환은 이미 반올림을 쓰고 있었는데
@@ -409,7 +409,7 @@ HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse)
          * 예전에는 이 루프가 재시도를 들고 있었는데, 그러면 같은 함수를
          * 쓰는 홈 경로는 재시도 없이 한 방에 실패했다.
          *
-         * ⚠️ 실패를 조용히 넘기면 호출자가 위치를 0 으로 두게 되고, 목표(0)와
+         * 주의: 실패를 조용히 넘기면 호출자가 위치를 0 으로 두게 되고, 목표(0)와
          *   우연히 일치해 "축이 실제로는 안 움직였는데 홈 완료" 가 된다.
          *   그래서 실패는 반드시 상태로 돌려준다. */
         st = motor_read_encoder(ax, &enc);

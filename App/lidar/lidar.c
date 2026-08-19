@@ -167,7 +167,7 @@ void lidar_on_rx_cplt(UART_HandleTypeDef *huart)
                             g_last_frame.dis_status      = f.dis_status;
                             g_last_frame.range_precision = f.range_precision;
                             g_have_frame = true;
-                            /* ★ 각도를 여기서 잡는다. 이 시점이 프레임이
+                            /* 핵심: 각도를 여기서 잡는다. 이 시점이 프레임이
                              *   완성된 순간이라 거리와 시간축이 맞는다. */
                             lidar_push_sample(&f);
                         }

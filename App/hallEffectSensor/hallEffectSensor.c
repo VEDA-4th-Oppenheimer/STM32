@@ -25,7 +25,7 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
 {
     HAL_StatusTypeDef status = HAL_ERROR;
 
-    /* ⚠️ 여기는 원래 `||` 였다. 그러면 핸들만 유효하고 결과 포인터가 NULL 인
+    /* 주의: 여기는 원래 `||` 였다. 그러면 핸들만 유효하고 결과 포인터가 NULL 인
      *   경우에도 통과해 encoder_data->raw_angle 에서 NULL 역참조로 죽는다.
      *   가드가 정반대로 동작하고 있었다. 두 인자가 **모두** 유효해야 한다. */
     if ((hi2c != NULL) && (encoder_data != NULL)) {
@@ -35,7 +35,7 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
         /* 0x03 레지스터부터 2바이트.
          * 핸들은 축에 따라 다르다 — Pan=I2C3(PA8/PC9), Tilt=I2C1(PB8/PB9).
          * (원 주석은 "I2C1: PA8/PC9" 로 둘을 뒤섞어 적고 있었다) */
-        /* ⚠️ 원래는 HAL_I2C_Mem_Read 였다. 그건 레지스터 주소를 쓴 뒤
+        /* 주의: 원래는 HAL_I2C_Mem_Read 였다. 그건 레지스터 주소를 쓴 뒤
          *   **repeated start** 로 읽기로 전환하는데, 실기에서 그 repeated
          *   start 가 400kHz 마진을 못 버티고 NACK(err=0x04) 났다. 벤치의
          *   방식 탐색 결과가 근거다(2026-08-05):
@@ -51,7 +51,7 @@ HAL_StatusTypeDef Encoder_Read(I2C_HandleTypeDef *hi2c, Encoder_t *encoder_data)
          *   마진을 최대로 둔다 — 엔코더는 홈 확립에 쓰이고 홈이 틀리면
          *   좌표계 전체가 틀어지므로 "겨우 되는" 상태로 두면 안 된다.
          *
-         *   ⚠️ 순서 의존: Transmit 이 성공해야만 Receive 가 의미 있다. */
+         *   주의: 순서 의존: Transmit 이 성공해야만 Receive 가 의미 있다. */
         status = HAL_I2C_Master_Transmit(hi2c, MT6701_ADDR, &reg_addr, 1u,
                                          I2C_TIMEOUT);
         if (status == HAL_OK) {
@@ -104,7 +104,7 @@ static bool encoder_pins_of(const I2C_HandleTypeDef *hi2c, struct i2c_pins *out)
 
 /* SCL 을 최대 9번 토글해 슬레이브가 붙잡고 있는 SDA 를 놓게 한다.
  *
- * ★ 왜 9번인가: 슬레이브가 바이트 전송 중간에 갇히면 남은 비트 수만큼 클럭을
+ * 핵심: 왜 9번인가: 슬레이브가 바이트 전송 중간에 갇히면 남은 비트 수만큼 클럭을
  *   더 받아야 그 바이트를 끝내고 SDA 를 놓는다. 최악이 8비트 + ACK = 9 다.
  *   SDA 가 올라오면 즉시 중단한다.
  *
@@ -117,7 +117,7 @@ static void encoder_clock_out(const struct i2c_pins *p)
     g.Mode  = GPIO_MODE_OUTPUT_OD;    /* 오픈드레인 — 풀업이 high 를 만든다 */
     /* cppcheck-suppress misra-c2012-7.3 ; 애드온 오탐 (아래 근거)
      *
-     * ⚠️ 우리 코드에는 소문자 l 접미사가 없다. cppcheck misra.py 의 7.3 정규식이
+     * 주의: 우리 코드에는 소문자 l 접미사가 없다. cppcheck misra.py 의 7.3 정규식이
      *      ^(0[xX])?[0-9a-fA-FpP.]+[Uu]*l+[Uu]*$
      *   인데 `0x` 접두가 **선택**이고 문자 집합에 P 가 들어 있어서, 식별자
      *   `Pull` 이  P(=수) + u + ll(=접미사)  로 해석된다. 즉 GPIO_InitTypeDef 의
@@ -153,7 +153,7 @@ static void encoder_clock_out(const struct i2c_pins *p)
 
 /* 헤더의 설명 참조.
  *
- * ⚠️ **DeInit + Init 만으로는 부족했다** (2026-08-13 실기). MspDeInit 이 하는
+ * 주의: **DeInit + Init 만으로는 부족했다** (2026-08-13 실기). MspDeInit 이 하는
  *   것은 `__HAL_RCC_I2Cx_CLK_DISABLE()` + GPIO 해제뿐인데, **클럭을 끄는 것은
  *   페리페럴을 리셋하는 것이 아니다.** 내부 상태머신과 레지스터가 그대로 남아
  *   있다가 클럭을 다시 켜면 그 상태로 살아나므로 BUSY 래치가 안 풀린다.

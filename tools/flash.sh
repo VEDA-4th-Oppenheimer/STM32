@@ -9,14 +9,14 @@
 #    (기본)  Mac 에서 실행 → 빌드 · scp · 원격 플래시를 한 번에
 #    -l      Pi 에서 직접 실행 → 이미 있는 elf 를 굽기만
 #
-#  ⚠️ 왜 드래그앤드롭(MSD)이 아니라 SWD 인가 = **검증** 때문이다.
+#  주의: 왜 드래그앤드롭(MSD)이 아니라 SWD 인가 = **검증** 때문이다.
 #     NUCLEO 의 USB 드라이브에 .bin 을 cp 하면 거의 항상 성공을 반환하는데,
 #     그건 데이터를 장치에 넘겼다는 뜻이지 플래시에 제대로 앉았다는 뜻이 아니다.
 #     읽어서 대조하지 않으므로 부분 기록이 나도 모른다. 홈·엔코더·모터를
 #     동시에 쫓는 상황에서 "펌웨어가 제대로 올라갔나"가 불확실하면 진단이
 #     못 굴러간다. SWD 는 `** Verified OK **` 를 준다.
 #
-#  ⚠️ .elf 를 그대로 쓴다 — objcopy 단계가 없다. 옛 .bin 을 올려놓고
+#  주의: .elf 를 그대로 쓴다 — objcopy 단계가 없다. 옛 .bin 을 올려놓고
 #     "코드를 고쳤는데 왜 그대로지" 하는 사고를 원천 차단한다.
 #
 #  사전 준비
@@ -74,7 +74,7 @@ md5of() {
     else echo "-"; fi
 }
 
-# OpenOCD 명령. ⚠️ `~` 를 쓰면 안 된다 — -c "..." 안의 문자열은 OpenOCD 에
+# OpenOCD 명령. 주의: `~` 를 쓰면 안 된다 — -c "..." 안의 문자열은 OpenOCD 에
 # 그대로 전달되고 틸데 확장이 일어나지 않아 "couldn't open ~/adts.elf" 가 난다.
 # $HOME 은 큰따옴표 안에서 셸이 치환하므로 동작한다. 여기서는 아예 절대경로를
 # 만들어 넘겨 그 함정 자체를 없앤다.
@@ -87,10 +87,10 @@ if [ "$NO_BUILD" -eq 0 ] && [ "$LOCAL" -eq 0 ]; then
     if [ -d "$REPO/build/Debug" ]; then
         say "빌드"
         cmake --build "$REPO/build/Debug" -j8 2>&1 | grep -E "warning: #warning|error|RAM:|FLASH:|ninja: no work" || true
-        # ⚠️ 파이프를 거쳤으므로 $? 는 grep 것이다. 실제 결과를 봐야 한다.
+        # 주의: 파이프를 거쳤으므로 $? 는 grep 것이다. 실제 결과를 봐야 한다.
         [ "${PIPESTATUS[0]}" -eq 0 ] || die "빌드 실패"
     else
-        echo "⚠ build/Debug 가 없다 — 빌드를 건너뛴다 (cmake --preset Debug 먼저)"
+        echo "주의: build/Debug 가 없다 — 빌드를 건너뛴다 (cmake --preset Debug 먼저)"
     fi
 fi
 
@@ -113,7 +113,7 @@ if [ "$LOCAL" -eq 1 ]; then
     OUT=$(eval "$(openocd_cmd "$ABS")" 2>&1); RC=$?
     echo "$OUT"
     if echo "$OUT" | grep -q "Verified OK"; then
-        echo; say "✅ 완료 — Verified OK"
+        echo; say " 완료 — Verified OK"
         exit 0
     fi
     die "검증 실패 (rc=$RC) — 위 출력 확인"
@@ -136,7 +136,7 @@ fi
 say "전송 → $HOST:~/$REMOTE_NAME"
 scp -q "$ELF" "$HOST:$REMOTE_NAME" || die "scp 실패"
 
-# ⚠️ 전송 무결성을 반드시 대조한다. 파일이 깨진 채 구우면 OpenOCD 는
+# 주의: 전송 무결성을 반드시 대조한다. 파일이 깨진 채 구우면 OpenOCD 는
 #    "그 깨진 내용" 으로 검증을 통과시킨다 — verify 는 elf 와 플래시를
 #    비교할 뿐 elf 자체가 맞는지는 모른다.
 REMOTE_MD5=$(ssh "$HOST" "md5sum \$HOME/$REMOTE_NAME 2>/dev/null | awk '{print \$1}'")
@@ -158,7 +158,7 @@ if echo "$OUT" | grep -q "NO_OPENOCD"; then
 fi
 if echo "$OUT" | grep -q "Verified OK"; then
     echo
-    say "✅ 완료 — Verified OK"
+    say " 완료 — Verified OK"
     cat <<EOF
 
 ── 바로 확인 ────────────────────────────────────────────────────────────────

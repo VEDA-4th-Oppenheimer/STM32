@@ -41,4 +41,4 @@ cppcheck \
   --error-exitcode=1 \
   --template="{severity}|{file}:{line}| {message} ({id}) [CWE-{cwe}]"
 
-echo "==> 정적분석 통과 ✅"
+echo "==> 정적분석 통과 "
