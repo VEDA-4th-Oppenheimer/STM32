@@ -264,6 +264,9 @@ void scan_init(void);
 void scan_home(void);
 void scan_start(const struct proto_scan_start *ss);
 void scan_stop(void);
+/* 비상정지 — 통지도 파킹도 없이 즉시 시퀀스 폐기 (CMD_DISARM 전용).
+ * scan_stop 과 나눠야 하는 이유는 구현부 주석 참조. */
+void scan_abort(void);
 
 /* 메인루프에서 매 바퀴 호출. 상태 전이와 엔코더 판독이 전부 여기서 일어난다. */
 void scan_process(void);

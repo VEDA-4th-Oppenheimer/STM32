@@ -72,7 +72,7 @@ static void scan_report_err(uint8_t code)
 {
     struct proto_err e;
     e.code = code;
-    uart_rpi_send_frame((uint8_t)CMD_ERROR, &e, (uint8_t)sizeof(e));
+    (void)uart_rpi_send_frame((uint8_t)CMD_ERROR, &e, (uint8_t)sizeof(e));
 }
 
 /* 이번 줄의 팬 목표(펄스).
@@ -245,11 +245,31 @@ void scan_stop(void)
     if (s.state != SC_IDLE) {
         /* 지금 위치에서 멈추고 완료 통지까지 보낸다. 데몬은 SCAN_DONE 의
          * point_count 로 실제 받은 점 수를 대조하므로, 중단이어도 통지가
-         * 있어야 "몇 점에서 끊겼는지" 를 알 수 있다. */
+         * 있어야 "몇 점에서 끊겼는지" 를 알 수 있다.
+         *
+         * SC_DONE 으로 보내는 것은 파킹까지 거치기 위해서다 — 축이 스윕
+         * 도중 아무 데나 서 있으면 육안 탈조 확인의 기준선이 사라진다. */
         motor_set_target(MOTOR_AXIS_PAN,  motor_get_pulse(MOTOR_AXIS_PAN));
         motor_set_target(MOTOR_AXIS_TILT, motor_get_pulse(MOTOR_AXIS_TILT));
         s.state = SC_DONE;
     }
+}
+
+/* 비상정지용. 통지도 파킹도 없이 그 자리에서 시퀀스를 버린다.
+ *
+ * 주의: CMD_DISARM 이 scan_stop() 을 부르면 안 된다. 그러면 SC_DONE 으로
+ *   가는데, 호출자가 곧이어 motor_disarm() 으로 전류를 끊은 **다음 루프에서**
+ *   scan_do_done() 이 돌면서 두 가지를 한다:
+ *     ① 가짜 SCAN_DONE 송신 — 스캔이 끝난 적이 없는데 완료 통지가 나간다
+ *     ② 파킹 목표를 0 으로 재설정 — 전류가 없으니 축은 안 움직이는데
+ *        스텝카운트만 0 까지 흘러가 좌표계가 조용히 틀어진다
+ *   ②는 motor.c 의 s_armed 로도 막지만, 애초에 이 경로를 타지 않는 것이 맞다.
+ *
+ * homed 는 그대로 둔다. 데몬이 스캔마다 홈을 다시 잡으므로(§17-10) 여기서
+ * 내려도 실익이 없고, 내리면 cmd/home 없이 재개하는 흐름이 막힌다. */
+void scan_abort(void)
+{
+    s.state = SC_IDLE;
 }
 
 bool scan_is_busy(void)
@@ -286,7 +306,7 @@ static void scan_do_homing(void)
     h.tilt_encoder_raw = 0xFFFFu;
     h.pan_ddeg  = 0;
     h.tilt_ddeg = 0;
-    uart_rpi_send_frame((uint8_t)CMD_HOMED, &h, (uint8_t)sizeof(h));
+    (void)uart_rpi_send_frame((uint8_t)CMD_HOMED, &h, (uint8_t)sizeof(h));
     s.state = SC_IDLE;   /* 이 모드는 "지금 자리 = 0" 이라 이동할 것이 없다 */
 #else
     Encoder_t pan_enc;
@@ -400,7 +420,7 @@ static void scan_do_homing(void)
 static void scan_home_finish(void)
 {
     s.home_retry = 0u;
-    uart_rpi_send_frame((uint8_t)CMD_HOMED, &s.home,
+    (void)uart_rpi_send_frame((uint8_t)CMD_HOMED, &s.home,
                         (uint8_t)sizeof(s.home));
     s.state = SC_IDLE;
 }

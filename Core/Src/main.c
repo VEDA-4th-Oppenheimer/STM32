@@ -600,10 +600,20 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  /* 주의: 여기서 반환하면 안 된다.
+   *
+   *   while(1) 이 주석 처리된 채로 남아 있었다. 그러면 초기화가 실패해도
+   *   인터럽트만 끈 채 실행이 계속되는데, SysTick 이 죽어 HAL_GetTick 이
+   *   멈추고 HAL_Delay 는 영영 안 돌아온다. 그런데 IWDG 갱신은 인터럽트가
+   *   아니라 메인루프라, 워치독조차 이 상태를 못 잡는다. 즉 반쯤 죽은 채로
+   *   RPi 의 PING 에는 답할 수도 있어 링크가 살아있는 것처럼 보인다.
+   *
+   *   멈춰 서면 IWDG 가 갱신되지 않아 하드웨어가 리셋한다. 조용히 이상하게
+   *   도는 것보다 낫다. */
   __disable_irq();
-  // while (1)
-  // {
-  // }
+  while (1)
+  {
+  }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

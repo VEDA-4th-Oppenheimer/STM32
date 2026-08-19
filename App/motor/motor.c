@@ -101,6 +101,16 @@ struct axis_rt {
 
 static struct axis_rt s_rt[MOTOR_AXIS_COUNT];
 
+/* 드라이버에 전류가 인가돼 있는가.
+ *
+ * 주의: 이게 없으면 disarm 뒤에 누가 motor_set_target 을 부르는 순간 ISR 이
+ *   전류 없는 축을 향해 펄스를 세고, 스텝카운트만 목표까지 이동한다. 축은
+ *   실제로 안 움직이므로 **좌표계가 조용히 틀어진다** — 오류도 안 나고
+ *   엔코더를 다시 읽기 전까지는 드러나지도 않는다. 실제로 CMD_DISARM 이
+ *   그 경로를 타고 있었다(scan_stop 이 SC_DONE 으로 보내 파킹 목표를 다시
+ *   설정했다). 목표를 당기는 것만으로는 부족하고, 펄스 자체를 막아야 한다. */
+static volatile bool s_armed = false;
+
 /* ---------------------------------------------------------------------------
  *  램프 산수 — 전부 32비트 정수다
  *
@@ -250,6 +260,7 @@ void motor_enable(void)
                       s_cfg[MOTOR_AXIS_PAN].en_pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_TILT].en_port,
                       s_cfg[MOTOR_AXIS_TILT].en_pin, GPIO_PIN_RESET);
+    s_armed = true;
 }
 
 void motor_disarm(void)
@@ -264,6 +275,7 @@ void motor_disarm(void)
                       s_cfg[MOTOR_AXIS_PAN].en_pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_TILT].en_port,
                       s_cfg[MOTOR_AXIS_TILT].en_pin, GPIO_PIN_SET);
+    s_armed = false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -437,8 +449,9 @@ static inline void axis_step(motor_axis_t ax)
     const int32_t cur = rt->pulse;
     const int32_t tgt = rt->target;
 
-    /* 도착했으면 펄스 없음 */
-    if (cur != tgt) {
+    /* 전류가 없으면 카운트도 하지 않는다 (s_armed 주석 참조).
+     * 도착했으면 펄스 없음. */
+    if (s_armed && (cur != tgt)) {
         const bool forward = (cur < tgt);
         int32_t next;
         int32_t remaining;

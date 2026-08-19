@@ -11,6 +11,7 @@
 #ifndef UART_RPI_H
 #define UART_RPI_H
 
+#include <stdbool.h>
 #include "main.h"        /* UART_HandleTypeDef (HAL 타입) */
 #include "protocol.h"    /* PROTO_*, enum proto_cmd, struct proto_* */
 
@@ -27,7 +28,12 @@ void uart_rpi_on_error(UART_HandleTypeDef *huart);
 void uart_rpi_process(void);
 
 /* protocol.h 프레임 조립 후 USART1 로 상행 송신 (PONG/HOMED/DISTANCE ...). */
-void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
+/* 반환 true = 프레임 전체 송신 성공. 실패를 무시하면 스캔 점 카운터가
+ * 실제 수신 수보다 커진다(구현부 주석). */
+bool uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len);
+
+/* 송신 실패 누적 (진단). */
+uint32_t uart_rpi_tx_fail_count(void);
 
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA, protocol v5):

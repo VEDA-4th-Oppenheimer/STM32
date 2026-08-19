@@ -42,9 +42,21 @@ static volatile uint8_t    s_rb[256];      /* 수신 링버퍼                  
 static volatile uint16_t   s_rb_head = 0u;
 static volatile uint16_t   s_rb_tail = 0u;
 static uint32_t s_scan_count = 0; /* SCAN 시작할 때 point count 초기화 */
-/* protocol.h 프레임 빌드 → USART1 TX 전송 (상행) */
-void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
+static uint32_t s_tx_fail   = 0u; /* 송신 실패 누적 (진단용)              */
+
+/* protocol.h 프레임 빌드 -> USART1 TX 전송 (상행).
+ *
+ * 반환 true = HAL 이 프레임 전체를 보냈다고 보고했다.
+ *
+ * 주의: 예전에는 결과를 (void) 로 버렸다. 그러면 타임아웃이나 부분 전송이
+ *   나도 호출자가 알 수 없는데, 특히 스캔 점은 보낸 셈 치고 카운터를 올려서
+ *   SCAN_DONE.point_count 가 **RPi 가 실제로 받은 점 수보다 커진다.** 데몬은
+ *   그 값으로 유실을 대조하므로 판정이 거짓말이 된다. PONG/HOMED/ERROR 도
+ *   조용히 사라진다. */
+bool uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
 {
+    bool ok = false;
+
     if (payload_len <= PROTO_MAX_PAYLOAD) {            /* CWE-120 경계검사 */
         uint8_t  frame[PROTO_MAX_FRAME];
         uint16_t crc;
@@ -65,9 +77,19 @@ void uart_rpi_send_frame(uint8_t cmd, const void *payload, uint8_t payload_len)
         frame[total + 1u] = (uint8_t)((crc >> 8) & 0xFFu);
         total = (uint8_t)(total + PROTO_CRC_LEN);
 
-        (void)HAL_UART_Transmit(s_huart, frame, total, 100u);
-        DBG("[TX] cmd=0x%02X len=%u\r\n", cmd, payload_len);
+        ok = (HAL_UART_Transmit(s_huart, frame, total, 100u) == HAL_OK);
+        if (!ok) {
+            s_tx_fail++;
+        }
+        DBG("[TX] cmd=0x%02X len=%u ok=%u\r\n", cmd, payload_len, (unsigned)ok);
     }
+    return ok;
+}
+
+/* cppcheck-suppress misra-c2012-8.7 ; 공개 API — 진단 경로에서 호출 */
+uint32_t uart_rpi_tx_fail_count(void)
+{
+    return s_tx_fail;
 }
 
 /* 스캔 점 1개 상행 (CMD_SCAN_DATA) + point 카운터 증가.
@@ -89,8 +111,11 @@ void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
                                    .stm_ts_ms       = HAL_GetTick(),
                                    .dis_status      = dis_status,
                                    .range_precision = range_precision };
-    uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt));
-    s_scan_count++;
+    /* 보낸 것만 센다. 실패한 프레임까지 세면 SCAN_DONE.point_count 가
+     * RPi 가 받은 수보다 커져 유실 대조가 무의미해진다. */
+    if (uart_rpi_send_frame(CMD_SCAN_DATA, &pt, (uint8_t)sizeof(pt))) {
+        s_scan_count++;
+    }
 }
 
 /* 스캔 완료 통지 (CMD_SCAN_DONE): 상행한 총 point 수 전송 */
@@ -98,7 +123,7 @@ void uart_rpi_send_scan_point(int16_t pan_ddeg, int16_t tilt_ddeg,
 void uart_rpi_send_scan_done(void)
 {
     struct proto_scan_done d = { .point_count = s_scan_count };
-    uart_rpi_send_frame(CMD_SCAN_DONE, &d, (uint8_t)sizeof(d));
+    (void)uart_rpi_send_frame(CMD_SCAN_DONE, &d, (uint8_t)sizeof(d));
 }
 
 /* 완성된 프레임(buf[0..flen-1]) CRC 검증 후 CMD 디스패치 */
@@ -148,12 +173,15 @@ static void proto_dispatch(const uint8_t *buf, uint8_t flen)
 
         case CMD_DISARM:
             DBG("  DISARM (스텝 2축 disable)\r\n");
-            scan_stop();                                /* 시퀀스 중단 먼저 */
-            motor_disarm();                             /* → 전류 차단     */
+            /* scan_stop 이 아니라 scan_abort 다 — 전자는 SC_DONE 을 거쳐
+             * 파킹까지 가므로, 전류를 끊은 뒤 유령 이동과 가짜 SCAN_DONE 이
+             * 생긴다(scan_abort 구현부 주석). */
+            scan_abort();                               /* 시퀀스 폐기 먼저 */
+            motor_disarm();                             /* -> 전류 차단     */
             break;
 
         case CMD_PING:
-            uart_rpi_send_frame(CMD_PONG, NULL, 0u);    /* heartbeat 응답 */
+            (void)uart_rpi_send_frame(CMD_PONG, NULL, 0u); /* heartbeat 응답 */
             DBG("  PING -> PONG\r\n");
             break;
 
