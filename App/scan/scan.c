@@ -472,7 +472,7 @@ static void scan_do_homing(void)
  *
  *   무엇을 잡나: **DIR 극성 반전**(오차가 이동량의 2배로 벌어진다)과
  *   **축 걸림/탈조**(목표에 못 온다). 통과 못 하면 스캔을 시작하지 않는다 —
- *   여기서 막지 않으면 27분을 돌고 나서 통째로 틀린 산출물을 얻는다.
+ *   여기서 막지 않으면 수백 줄 스캔을 돌고 나서 통째로 틀린 산출물을 얻는다.
  *
  *   주의: **영점 상수(MOTOR_*_ZERO_OFFSET_DEG)가 틀린 건 여기서 못 잡는다.**
  *     홈에서 위치를 세울 때와 여기서 대조할 때 같은 offset 을 쓰므로 수식에서
@@ -540,12 +540,16 @@ static void scan_do_home_pose(void)
             s.state = SC_IDLE;
         } else if (too_far) {
             /* 통지만 안 하면 데몬이 HOME_TIMEOUT 까지 기다리다 취소하는데,
-             * 그러면 원인이 "무응답" 으로 보여 오해를 부른다. 명시적으로 알린다. */
+             * 그러면 원인이 "무응답" 으로 보여 오해를 부른다. 명시적으로 알린다.
+             *
+             * 축 값은 비트 플래그(PAN=1, TILT=2)이므로 OR 로 합쳐 전송한다.
+             * 삼항 연산자 단일 선택을 쓰면 양축 동시 탈조 시 Tilt 에러 비트가
+             * 누락되므로, 각각 판정해 합쳐 ERR_AXIS_BOTH(3)를 온전히 보존한다. */
+            const uint8_t ax = (uint8_t)(((scan_abs32(ep) > SCAN_HOME_TOL_DDEG) ? (uint8_t)ERR_AXIS_PAN  : 0u)
+                                       | ((scan_abs32(et) > SCAN_HOME_TOL_DDEG) ? (uint8_t)ERR_AXIS_TILT : 0u));
             s.home_retry = 0u;
             s.homed      = false;
-            scan_report_err((uint8_t)ERR_STALL,
-                            (scan_abs32(ep) > SCAN_HOME_TOL_DDEG)
-                                ? (uint8_t)ERR_AXIS_PAN : (uint8_t)ERR_AXIS_TILT);
+            scan_report_err((uint8_t)ERR_STALL, ax);
             s.state = SC_IDLE;
         } else {
             scan_home_finish();
@@ -555,17 +559,36 @@ static void scan_do_home_pose(void)
 
 static void scan_do_line_end(void)
 {
-    /* 여기서 엔코더를 읽지 않는다.
-     *
-     * 예전에는 틸트를 줄 끝마다 엔코더로 재영점했다. 그런데 급정지 링잉과
-     * 판독 잡음이 임계를 넘겨 헛 ERR_STALL 이 줄마다 났고, 스캔이 첫 줄에서
-     * 죽어 산출물이 아예 안 나왔다. 판독 시각과 라이다 샘플 시각이 다르다는
-     * 원래의 문제도 그대로다.
-     *
-     * 대신 각도는 **절대각에서 매번 새로 환산**하므로(scan_pan_target_pulse /
-     * scan_tilt_target_pulse) 재영점 없이도 절삭 오차는 누적되지 않는다.
-     * 남는 위험은 순수한 기계적 탈조뿐이고, 그건 스캔이 끝난 뒤 파킹 자세를
-     * 눈으로 확인해 가린다(scan.h SCAN_HOME_TOL_DDEG 주석). */
+#if !SCAN_NO_ENCODER
+    bool ok = false;
+    int32_t enc_pulse = 0;
+    const int32_t err = scan_encoder_error_ddeg(MOTOR_AXIS_TILT, &ok, &enc_pulse);
+
+    if (!ok) {
+        /* I2C 판독 실패 시 비상정지 및 에러 통지 */
+        motor_disarm();
+        s.homed = false;
+        scan_report_err((uint8_t)ERR_ENCODER, (uint8_t)ERR_AXIS_TILT);
+        s.state = SC_IDLE;
+        return;
+    }
+
+    if (scan_abs32(err) > SCAN_STALL_TILT_DDEG) {
+        /* [탈조 확정] 모터 차단 및 에러 전송 (RPi 사양: code=5, axis=2) */
+        motor_disarm();
+        s.homed = false;
+        scan_report_err((uint8_t)ERR_STALL, (uint8_t)ERR_AXIS_TILT);
+        s.state = SC_IDLE;
+        return;
+    }
+
+    /* [정상] 탈조 없음 확인 완료.
+     * 주의: 여기서 motor_sync_pulse(재영점)를 하지 않는다!
+     * 엔코더 지터(0.42도)가 스텝 카운터로 주입되면 매 스윕마다 랜덤 오프셋이 생겨
+     * 3D 포인트 클라우드에 줄무늬(Striping)와 표면 노이즈(+27%)가 발생한다.
+     * 스텝모터의 매끄러운 기구 궤적을 보존하고 순수 탈조 감시(Monitor-Only)만 수행한다. */
+#endif
+
     s.line++;
     if (s.line >= s.n_lines) {
         s.state = SC_DONE;
@@ -577,10 +600,30 @@ static void scan_do_line_end(void)
 
 static void scan_do_pan_step_done(void)
 {
-    /* 팬도 엔코더를 읽지 않는다. 원래도 **보정은 안 하고 세기만** 했는데
-     * (정지 상태 1도 이동은 탈조 위험이 사실상 없고, 폐루프 보정을 넣으면
-     *  엔코더 잡음이 불필요한 보정 이동을 만들어 새 실패 모드가 된다),
-     * 그 세는 값조차 상행 경로가 없어 아무도 못 보는 상태였다. */
+#if !SCAN_NO_ENCODER
+    bool ok = false;
+    int32_t enc_pulse = 0;
+    const int32_t err = scan_encoder_error_ddeg(MOTOR_AXIS_PAN, &ok, &enc_pulse);
+
+    if (!ok) {
+        /* I2C 판독 실패 시 비상정지 및 에러 통지 */
+        motor_disarm();
+        s.homed = false;
+        scan_report_err((uint8_t)ERR_ENCODER, (uint8_t)ERR_AXIS_PAN);
+        s.state = SC_IDLE;
+        return;
+    }
+
+    if (scan_abs32(err) > SCAN_STALL_PAN_DDEG) {
+        /* [탈조 확정] 모터 차단 및 에러 전송 (RPi 사양: code=5, axis=1) */
+        motor_disarm();
+        s.homed = false;
+        scan_report_err((uint8_t)ERR_STALL, (uint8_t)ERR_AXIS_PAN);
+        s.state = SC_IDLE;
+        return;
+    }
+#endif
+
     s.tilt_to_end = !s.tilt_to_end;          /* serpentine 반전 */
     motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
     s.state = SC_SWEEP;

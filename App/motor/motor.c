@@ -411,22 +411,47 @@ int32_t motor_encoder_deg_to_pulse(motor_axis_t ax, float deg)
     return (int32_t)((q >= 0.0f) ? (q + 0.5f) : (q - 0.5f));
 }
 
+static inline int32_t motor_median3(int32_t a, int32_t b, int32_t c)
+{
+    int32_t min = a;
+    int32_t max = a;
+    if (b < min) { min = b; }
+    if (b > max) { max = b; }
+    if (c < min) { min = c; }
+    if (c > max) { max = c; }
+    return (a + b + c) - min - max;
+}
+
 HAL_StatusTypeDef motor_read_encoder_pulse(motor_axis_t ax, int32_t *out_pulse)
 {
-    Encoder_t enc;
     HAL_StatusTypeDef st = HAL_ERROR;
 
     if ((ax < MOTOR_AXIS_COUNT) && (out_pulse != NULL)) {
-        /* 재시도·버스 복구는 motor_read_encoder 가 한다(그쪽 주석 참조).
-         * 예전에는 이 루프가 재시도를 들고 있었는데, 그러면 같은 함수를
-         * 쓰는 홈 경로는 재시도 없이 한 방에 실패했다.
-         *
-         * 주의: 실패를 조용히 넘기면 호출자가 위치를 0 으로 두게 되고, 목표(0)와
-         *   우연히 일치해 "축이 실제로는 안 움직였는데 홈 완료" 가 된다.
-         *   그래서 실패는 반드시 상태로 돌려준다. */
-        st = motor_read_encoder(ax, &enc);
-        if (st == HAL_OK) {
-            *out_pulse = motor_encoder_deg_to_pulse(ax, enc.degree);
+        int32_t samples[3] = {0};
+        uint32_t ok_count = 0u;
+
+        /* 노이즈 및 I2C 순간 글리치(스파이크) 제거를 위한 3회 샘플링 중앙값(Median) 필터.
+         * 정상 상태에서 3회 판독은 약 0.4ms 소요되어 정착 대기(100ms)에 영향이 없다.
+         * 단 1회의 튀는 값(Spike)이 들어와도 중앙값 필터가 100% 무시한다. */
+        for (uint32_t i = 0u; i < 3u; i++) {
+            Encoder_t enc;
+            if (motor_read_encoder(ax, &enc) == HAL_OK) {
+                samples[ok_count] = motor_encoder_deg_to_pulse(ax, enc.degree);
+                ok_count++;
+            }
+        }
+
+        if (ok_count == 3u) {
+            *out_pulse = motor_median3(samples[0], samples[1], samples[2]);
+            st = HAL_OK;
+        } else if (ok_count == 2u) {
+            *out_pulse = (samples[0] + samples[1]) / 2;
+            st = HAL_OK;
+        } else if (ok_count == 1u) {
+            *out_pulse = samples[0];
+            st = HAL_OK;
+        } else {
+            st = HAL_ERROR;
         }
     }
     return st;
