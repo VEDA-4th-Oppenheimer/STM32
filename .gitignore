@@ -39,3 +39,14 @@ Module.symvers
 #추가발견
 cmake-build-debug/
 .idea/
+
+# Local Documentation Folder
+.doc/
+
+# AI Agent & Assistant Artifacts (Do NOT commit)
+.agents/
+.claude/
+.cursor/
+.gemini/
+.antigravity/
+
