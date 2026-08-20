@@ -559,6 +559,8 @@ static void scan_do_home_pose(void)
 
 static void scan_do_line_end(void)
 {
+    bool proceed = true;
+
 #if !SCAN_NO_ENCODER
     bool ok = false;
     int32_t enc_pulse = 0;
@@ -570,36 +572,38 @@ static void scan_do_line_end(void)
         s.homed = false;
         scan_report_err((uint8_t)ERR_ENCODER, (uint8_t)ERR_AXIS_TILT);
         s.state = SC_IDLE;
-        return;
-    }
-
-    if (scan_abs32(err) > SCAN_STALL_TILT_DDEG) {
+        proceed = false;
+    } else if (scan_abs32(err) > SCAN_STALL_TILT_DDEG) {
         /* [탈조 확정] 모터 차단 및 에러 전송 (RPi 사양: code=5, axis=2) */
         motor_disarm();
         s.homed = false;
         scan_report_err((uint8_t)ERR_STALL, (uint8_t)ERR_AXIS_TILT);
         s.state = SC_IDLE;
-        return;
+        proceed = false;
+    } else {
+        /* [정상] 탈조 없음 확인 완료.
+         * 주의: 여기서 motor_sync_pulse(재영점)를 하지 않는다!
+         * 엔코더 지터(0.42도)가 스텝 카운터로 주입되면 매 스윕마다 랜덤 오프셋이 생겨
+         * 3D 포인트 클라우드에 줄무늬(Striping)와 표면 노이즈(+27%)가 발생한다.
+         * 스텝모터의 매끄러운 기구 궤적을 보존하고 순수 탈조 감시(Monitor-Only)만 수행한다. */
     }
-
-    /* [정상] 탈조 없음 확인 완료.
-     * 주의: 여기서 motor_sync_pulse(재영점)를 하지 않는다!
-     * 엔코더 지터(0.42도)가 스텝 카운터로 주입되면 매 스윕마다 랜덤 오프셋이 생겨
-     * 3D 포인트 클라우드에 줄무늬(Striping)와 표면 노이즈(+27%)가 발생한다.
-     * 스텝모터의 매끄러운 기구 궤적을 보존하고 순수 탈조 감시(Monitor-Only)만 수행한다. */
 #endif
 
-    s.line++;
-    if (s.line >= s.n_lines) {
-        s.state = SC_DONE;
-    } else {
-        motor_set_target(MOTOR_AXIS_PAN, scan_pan_target_pulse(s.line));
-        s.state = SC_PAN_STEP;
+    if (proceed) {
+        s.line++;
+        if (s.line >= s.n_lines) {
+            s.state = SC_DONE;
+        } else {
+            motor_set_target(MOTOR_AXIS_PAN, scan_pan_target_pulse(s.line));
+            s.state = SC_PAN_STEP;
+        }
     }
 }
 
 static void scan_do_pan_step_done(void)
 {
+    bool proceed = true;
+
 #if !SCAN_NO_ENCODER
     bool ok = false;
     int32_t enc_pulse = 0;
@@ -611,22 +615,24 @@ static void scan_do_pan_step_done(void)
         s.homed = false;
         scan_report_err((uint8_t)ERR_ENCODER, (uint8_t)ERR_AXIS_PAN);
         s.state = SC_IDLE;
-        return;
-    }
-
-    if (scan_abs32(err) > SCAN_STALL_PAN_DDEG) {
+        proceed = false;
+    } else if (scan_abs32(err) > SCAN_STALL_PAN_DDEG) {
         /* [탈조 확정] 모터 차단 및 에러 전송 (RPi 사양: code=5, axis=1) */
         motor_disarm();
         s.homed = false;
         scan_report_err((uint8_t)ERR_STALL, (uint8_t)ERR_AXIS_PAN);
         s.state = SC_IDLE;
-        return;
+        proceed = false;
+    } else {
+        /* [정상] 팬 탈조 없음 */
     }
 #endif
 
-    s.tilt_to_end = !s.tilt_to_end;          /* serpentine 반전 */
-    motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
-    s.state = SC_SWEEP;
+    if (proceed) {
+        s.tilt_to_end = !s.tilt_to_end;          /* serpentine 반전 */
+        motor_set_target(MOTOR_AXIS_TILT, scan_tilt_target_pulse());
+        s.state = SC_SWEEP;
+    }
 }
 
 static void scan_do_done(void)
