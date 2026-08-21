@@ -151,26 +151,27 @@ static void axis_set_speed(motor_axis_t ax, uint32_t v_q8)
  * 32비트 정수 연산만 사용하여 Cortex-M4 ISR 에서 약 10 사이클(0.12us) 이내 완료. */
 static inline uint32_t axis_scurve_scale_q8(uint32_t v_pps, uint32_t cruise_pps)
 {
+    uint32_t scale_q8 = 256u;
 #if MOTOR_SCURVE_ENABLE
-    if (cruise_pps <= MOTOR_START_PPS) {
-        return 256u;
+    if (cruise_pps > MOTOR_START_PPS) {
+        const uint32_t span = cruise_pps - MOTOR_START_PPS;
+        uint32_t delta = (v_pps > MOTOR_START_PPS) ? (v_pps - MOTOR_START_PPS) : 0u;
+        if (delta > span) {
+            delta = span;
+        }
+        /* x_q8: 0 ~ 256 */
+        const uint32_t x_q8 = (delta * 256u) / span;
+        /* bell_q8 = 4 * x * (1 - x) = x_q8 * (256 - x_q8) / 64 (0 ~ 256) */
+        const uint32_t bell_q8 = (x_q8 * (256u - x_q8)) / 64u;
+        /* scale_q8 = floor + (1 - floor) * bell = floor + (256 - floor) * bell / 256 */
+        const uint32_t floor_q8 = MOTOR_SCURVE_FLOOR_Q8;
+        scale_q8 = floor_q8 + (((256u - floor_q8) * bell_q8) / 256u);
     }
-    const uint32_t span = cruise_pps - MOTOR_START_PPS;
-    uint32_t delta = (v_pps > MOTOR_START_PPS) ? (v_pps - MOTOR_START_PPS) : 0u;
-    if (delta > span) {
-        delta = span;
-    }
-    /* x_q8: 0 ~ 256 */
-    const uint32_t x_q8 = (delta * 256u) / span;
-    /* bell_q8 = 4 * x * (1 - x) = x_q8 * (256 - x_q8) / 64 (0 ~ 256) */
-    const uint32_t bell_q8 = (x_q8 * (256u - x_q8)) / 64u;
-    /* scale_q8 = floor + (1 - floor) * bell = floor + (256 - floor) * bell / 256 */
-    const uint32_t floor_q8 = MOTOR_SCURVE_FLOOR_Q8;
-    const uint32_t scale_q8 = floor_q8 + (((256u - floor_q8) * bell_q8) / 256u);
-    return scale_q8;
 #else
-    return 256u;
+    (void)v_pps;
+    (void)cruise_pps;
 #endif
+    return scale_q8;
 }
 
 /* 지금 속도에서 시작 속도까지 감속하는 데 필요한 펄스 수.
