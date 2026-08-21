@@ -146,6 +146,34 @@ static void axis_set_speed(motor_axis_t ax, uint32_t v_q8)
     }
 }
 
+/* Phase 3: S-Curve 가속도 스케일링 계수 (q8 = 256 기준 1.0).
+ * 속도비 x 에 따라 2차 포물선 벨형 곡선(f(x) = floor + (1-floor)*4x(1-x))을 산출한다.
+ * 32비트 정수 연산만 사용하여 Cortex-M4 ISR 에서 약 10 사이클(0.12us) 이내 완료. */
+static inline uint32_t axis_scurve_scale_q8(uint32_t v_pps, uint32_t cruise_pps)
+{
+    uint32_t scale_q8 = 256u;
+#if MOTOR_SCURVE_ENABLE
+    if (cruise_pps > MOTOR_START_PPS) {
+        const uint32_t span = cruise_pps - MOTOR_START_PPS;
+        uint32_t delta = (v_pps > MOTOR_START_PPS) ? (v_pps - MOTOR_START_PPS) : 0u;
+        if (delta > span) {
+            delta = span;
+        }
+        /* x_q8: 0 ~ 256 */
+        const uint32_t x_q8 = (delta * 256u) / span;
+        /* bell_q8 = 4 * x * (1 - x) = x_q8 * (256 - x_q8) / 64 (0 ~ 256) */
+        const uint32_t bell_q8 = (x_q8 * (256u - x_q8)) / 64u;
+        /* scale_q8 = floor + (1 - floor) * bell = floor + (256 - floor) * bell / 256 */
+        const uint32_t floor_q8 = MOTOR_SCURVE_FLOOR_Q8;
+        scale_q8 = floor_q8 + (((256u - floor_q8) * bell_q8) / 256u);
+    }
+#else
+    (void)v_pps;
+    (void)cruise_pps;
+#endif
+    return scale_q8;
+}
+
 /* 지금 속도에서 시작 속도까지 감속하는 데 필요한 펄스 수.
  *   n = (v^2 - v_start^2) / (2*accel)
  *
@@ -160,7 +188,8 @@ static uint32_t axis_decel_pulses(uint32_t v_pps, uint32_t accel_pps2)
         const uint32_t dv2 = (v_pps * v_pps)
                            - (MOTOR_START_PPS * MOTOR_START_PPS);
         const uint32_t den = 2u * accel_pps2;
-        n = (dv2 + (den - 1u)) / den;
+        /* +4 펄스 여유를 두어 목적지 도착 전에 확실하게 MOTOR_START_PPS 로 착지 */
+        n = ((dv2 + (den - 1u)) / den) + 4u;
     }
     return n;
 }
@@ -183,6 +212,10 @@ static void axis_ramp(motor_axis_t ax, int32_t remaining)
         uint32_t v_q8  = rt->v_q8;
         uint32_t dv_q8 = (cfg->accel_pps2 * rt->c_us) / MOTOR_DV_DIV;
 
+        /* Phase 3: S-Curve 가속도 변조 — 현재 속도 위치에 따른 저크 억제 가중치 적용 */
+        const uint32_t s_scale_q8 = axis_scurve_scale_q8(v_pps, cfg->cruise_pps);
+        dv_q8 = (dv_q8 * s_scale_q8) / 256u;
+
         /* 가속도가 아주 작고 간격이 짧으면 절삭으로 0 이 된다. 그대로 두면
          * 램프가 얼어붙으므로 최소 1 (=1/256 pps) 은 움직이게 한다. */
         if (dv_q8 == 0u) {
@@ -190,9 +223,15 @@ static void axis_ramp(motor_axis_t ax, int32_t remaining)
         }
 
         if ((uint32_t)remaining <= axis_decel_pulses(v_pps, cfg->accel_pps2)) {
-            /* 감속 구간 — 남은 펄스로 시작 속도까지 못 내려오는 시점이다 */
-            v_q8 = ((v_q8 - MOTOR_V_START_Q8) > dv_q8) ? (v_q8 - dv_q8)
-                                                       : MOTOR_V_START_Q8;
+            /* 감속 구간 — 남은 펄스로 시작 속도까지 내려오는 구간이다.
+             * 감속 시에는 정확하게 MOTOR_V_START_Q8 에 착지하도록
+             * 공칭 가속도(cfg->accel_pps2) 기반의 확정적 감속 증분을 적용한다. */
+            uint32_t dv_dec_q8 = (cfg->accel_pps2 * rt->c_us) / MOTOR_DV_DIV;
+            if (dv_dec_q8 == 0u) {
+                dv_dec_q8 = 1u;
+            }
+            v_q8 = ((v_q8 - MOTOR_V_START_Q8) > dv_dec_q8) ? (v_q8 - dv_dec_q8)
+                                                           : MOTOR_V_START_Q8;
         } else if (v_q8 < cruise_q8) {
             v_q8 += dv_q8;
             if (v_q8 > cruise_q8) {

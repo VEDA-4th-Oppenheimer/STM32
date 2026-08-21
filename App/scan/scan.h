@@ -190,7 +190,7 @@
  * ------------------------------------------------------------------------- */
 #define SCAN_HOME_SETTLE_MS    3000u
 #define SCAN_START_SETTLE_MS   3000u
-#define SCAN_LINE_SETTLE_MS     100u
+#define SCAN_LINE_SETTLE_MS      40u
 
 /* --- 스캔 종료 후 파킹 → 전류 차단 ----------------------------------------
  *  스캔이 끝나면 양축을 기구각 0 으로 되돌린 뒤 **모터 전류를 끊는다.**
