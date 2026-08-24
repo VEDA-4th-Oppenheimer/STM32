@@ -77,8 +77,6 @@ void Error_Handler(void);
 #define PAN_STEP_GPIO_Port GPIOB
 #define PAN_DIR_Pin GPIO_PIN_15
 #define PAN_DIR_GPIO_Port GPIOB
-#define PAN_CAILI_SWITCH_Pin GPIO_PIN_8
-#define PAN_CAILI_SWITCH_GPIO_Port GPIOC
 #define PAN_ENCODER_SDA_Pin GPIO_PIN_9
 #define PAN_ENCODER_SDA_GPIO_Port GPIOC
 #define PAN_ENCODER_SCL_Pin GPIO_PIN_8

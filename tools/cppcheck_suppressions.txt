@@ -87,24 +87,8 @@ misra-c2012-2.5:*App/lidar/lidar_bench.c
 misra-c2012-2.5:*App/lidar/lidar_bench.h
 misra-c2012-2.5:*App/bench_common.h
 
-# --- 7. cppcheck 2.13.0 오탐 (2026-08-05) ---
-#   ※ 구분선에 '#' 단독 줄을 쓰지 말 것. 2.13 파서는 길이 2 이상일 때만 주석으로
-#     보므로 '#' 한 글자는 규칙으로 파싱돼 "Failed to add suppression. No id" 가 된다.
-# ---
-#   11.8 (pointed-to 자격 제거, Required) — motor.c 한정, 오탐 억제
-#     대상: HAL_GPIO_WritePin 호출 8곳 (74/82/84/96/98, 211/219/221)
-#     근거: s_cfg 가 static const 라 멤버 lvalue 는 GPIO_TypeDef *const 지만,
-#           값을 읽으면 top-level const 는 사라져 GPIO_TypeDef * 가 된다.
-#           HAL 파라미터도 GPIO_TypeDef * — 가리키는 타입은 양쪽 다 무자격이라
-#           제거되는 자격이 없다. 11.8 은 pointed-to 자격만 다루는 룰이다.
-#     확인: CI 2.13.0 은 8건 지적, cppcheck 2.21 은 0건(11.8 검사 자체는 활성 —
-#           진짜 위반인 (char*)cp 는 잡는다). 버전만 다른데 결과가 갈린다.
-#     해제: CI cppcheck 가 2.14 이상이 되면 이 줄을 지운다.
-#           (noble apt 는 2.13.0 뿐 — 버전 고정 방식은 별도 과제)
-misra-c2012-11.8:*App/motor/motor.c
-#   같은 오탐이 hallEffectSensor.c 에도 있다 (2026-08-19).
-#     대상: Encoder_BusRecover 의 9클럭 버스 해제 — const struct i2c_pins * 의
-#           멤버(GPIO_TypeDef *)를 HAL_GPIO_Init/WritePin/ReadPin 에 넘기는 12곳.
-#     근거·해제 조건은 위 motor.c 와 동일하다. 로컬 cppcheck 2.21 은 0건인데
-#     CI 2.13.0 만 지적해서, 로컬 통과 후 CI 에서 처음 드러났다.
-misra-c2012-11.8:*App/hallEffectSensor/hallEffectSensor.c
+# --- 7. cppcheck 2.13.0 오탐 대응 (코드 인라인 주석으로 전환 완료) ---
+#   ※ 11.8 (pointed-to 자격 제거, Required) 오탐은 파일 통째 억제 대신,
+#     각 호출부 바로 윗줄에 `// cppcheck-suppress misra-c2012-11.8` 인라인 주석으로
+#     국소 적용하여 파일 나머지 영역의 11.8 보안 검사를 온전히 보존한다.
+#     (적용 대상: App/motor/motor.c 8곳, App/hallEffectSensor/hallEffectSensor.c 9곳)

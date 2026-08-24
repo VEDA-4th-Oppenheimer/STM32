@@ -40,11 +40,9 @@ Module.symvers
 cmake-build-debug/
 .idea/
 
-# Documentation Folders (Do NOT track in Git)
-docs/
+# Local Documentation Folder
 .docs/
-.doc/
-
+.doc
 # AI Agent & Assistant Artifacts (Do NOT commit)
 .agents/
 .claude/

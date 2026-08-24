@@ -127,26 +127,37 @@ static void encoder_clock_out(const struct i2c_pins *p)
     g.Pull  = GPIO_PULLUP;
     g.Speed = GPIO_SPEED_FREQ_LOW;
 
-    g.Pin = p->scl_pin;  HAL_GPIO_Init(p->scl_port, &g);
-    g.Pin = p->sda_pin;  HAL_GPIO_Init(p->sda_port, &g);
+    g.Pin = p->scl_pin;
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
+    HAL_GPIO_Init(p->scl_port, &g);
+    g.Pin = p->sda_pin;
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
+    HAL_GPIO_Init(p->sda_port, &g);
 
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(p->sda_port, p->sda_pin, GPIO_PIN_SET);   /* SDA 놓기 */
 
     for (uint32_t i = 0u; i < 9u; i++) {
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         if (HAL_GPIO_ReadPin(p->sda_port, p->sda_pin) == GPIO_PIN_SET) {
             break;                       /* 슬레이브가 놓았다 */
         }
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(p->scl_port, p->scl_pin, GPIO_PIN_RESET);
         HAL_Delay(1u);                   /* 100kHz 보다 훨씬 느리게 — 안전측 */
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(p->scl_port, p->scl_pin, GPIO_PIN_SET);
         HAL_Delay(1u);
     }
 
     /* STOP: SCL high 인 동안 SDA 를 low -> high */
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(p->sda_port, p->sda_pin, GPIO_PIN_RESET);
     HAL_Delay(1u);
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(p->scl_port, p->scl_pin, GPIO_PIN_SET);
     HAL_Delay(1u);
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(p->sda_port, p->sda_pin, GPIO_PIN_SET);
     HAL_Delay(1u);
 }
