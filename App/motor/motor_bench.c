@@ -73,7 +73,7 @@ static void mb_banner(void)
     MB("\r\n");
     MB("  EN 은 active-low — 구동 중엔 **L(0V)** 이어야 한다.\r\n");
     MB("  H 로 읽히면 enable 이 안 걸린 것(배선이 옛 핀맵일 가능성).\r\n");
-    MB("  핀: PAN STEP=PB14 DIR=PB15 EN=PB1 / TILT STEP=PA6 DIR=PA7 EN=PB6\r\n");
+    MB("  핀: PAN STEP=PB13 DIR=PB15 EN=PB1 / TILT STEP=PA6 DIR=PA7 EN=PB12\r\n");
     MB("--------------------------------------------------------------\r\n");
 }
 

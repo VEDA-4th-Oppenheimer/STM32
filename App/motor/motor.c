@@ -286,6 +286,7 @@ void motor_init(void)
         s_rt[ax].pulse        = 0;
         s_rt[ax].target       = 0;
         s_rt[ax].forward_prev = false;
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(s_cfg[ax].step_port, s_cfg[ax].step_pin, GPIO_PIN_RESET);
         axis_timer_init(ax);
     }
@@ -295,8 +296,10 @@ void motor_init(void)
 void motor_enable(void)
 {
     /* EN 은 active-low */
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_PAN].en_port,
                       s_cfg[MOTOR_AXIS_PAN].en_pin, GPIO_PIN_RESET);
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_TILT].en_port,
                       s_cfg[MOTOR_AXIS_TILT].en_pin, GPIO_PIN_RESET);
     s_armed = true;
@@ -310,8 +313,10 @@ void motor_disarm(void)
     for (motor_axis_t ax = 0; ax < MOTOR_AXIS_COUNT; ax++) {
         s_rt[ax].target = s_rt[ax].pulse;
     }
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_PAN].en_port,
                       s_cfg[MOTOR_AXIS_PAN].en_pin, GPIO_PIN_SET);
+    // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
     HAL_GPIO_WritePin(s_cfg[MOTOR_AXIS_TILT].en_port,
                       s_cfg[MOTOR_AXIS_TILT].en_pin, GPIO_PIN_SET);
     s_armed = false;
@@ -529,6 +534,7 @@ static inline void axis_step(motor_axis_t ax)
             rt->forward_prev = forward;
         }
 
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(cfg->dir_port, cfg->dir_pin,
                           forward ? cfg->dir_forward
                                   : ((cfg->dir_forward == GPIO_PIN_SET) ? GPIO_PIN_RESET
@@ -537,8 +543,10 @@ static inline void axis_step(motor_axis_t ax)
         /* DIR 셋업(650ns) 확보 후 STEP 상승 */
         for (volatile uint32_t i = 0u; i < MOTOR_DIR_SETUP_SPIN; i++) { }
 
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(cfg->step_port, cfg->step_pin, GPIO_PIN_SET);
         for (volatile uint32_t i = 0u; i < MOTOR_STEP_PULSE_SPIN; i++) { }
+        // cppcheck-suppress misra-c2012-11.8 ; CI Cppcheck 2.13.0 const struct 멤버 파서 오탐 대응
         HAL_GPIO_WritePin(cfg->step_port, cfg->step_pin, GPIO_PIN_RESET);
 
         next = forward ? (cur + 1) : (cur - 1);

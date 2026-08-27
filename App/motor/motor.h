@@ -25,8 +25,8 @@
  *        MX_TIMx_Init 에 넣어 둔 Prescaler/Period 값은 쓰이지 않는다.
  *
  *  하드웨어:
- *    Pan  STEP=PB14  DIR=PB15  EN=PB1   엔코더 I2C3 (PA8/PC9)
- *    Tilt STEP=PA6   DIR=PA7   EN=PB6   엔코더 I2C1 (PB8/PB9)
+ *    Pan  STEP=PB13  DIR=PB15  EN=PB1   엔코더 I2C3 (PA8/PC9)
+ *    Tilt STEP=PA6   DIR=PA7   EN=PB12  엔코더 I2C1 (PB8/PB9)
  * ==========================================================================*/
 #ifndef MOTOR_H
 #define MOTOR_H
