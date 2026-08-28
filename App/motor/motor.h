@@ -128,15 +128,18 @@ typedef enum {
  *   Phase 4: 750 PPS (84.375도/s)로 미세 조정하여 격자당 1.07개 샘플 밀도를 확보하고 결측을 제거한다.
  */
 #define MOTOR_TILT_CRUISE_PPS 750u /* 84.375도/s — 셀당 1.07샘플 */
-#define MOTOR_TILT_ACCEL_PPS2 1800u
+#define MOTOR_TILT_ACCEL_PPS2 2100u /* 2100 PPS² 피크 가속도 (양측 S-Curve 절충 실험) */
 
 /* --- Phase 3: S-Curve (저크 제한) 가감속 프로파일 ------------------------
  *  사다리꼴의 불연속 가속도 점프(Jerk=∞)를 2차 포물선 가속도 벨형 곡선으로
  * 완화하여 출발/순항진입/감속/정지 시의 기구 진동과 관성 충격을 근본적으로
  * 제거한다. MOTOR_SCURVE_FLOOR_Q8: 기동 및 착지 시 최저 가속도 비율 (64 = 25%).
+ * MOTOR_SCURVE_DECEL_SCALE_Q8: 감속 S-Curve 적용 시 Floor 25% 가속도 감쇠에
+ * 따른 필요 감속 펄스 확장 계수 (398 = 약 1.555배).
  */
 #define MOTOR_SCURVE_ENABLE 1u
 #define MOTOR_SCURVE_FLOOR_Q8 64u
+#define MOTOR_SCURVE_DECEL_SCALE_Q8 398u /* 398/256 = 1.555x (S-Curve 감속 펄스 확장) */
 
 /* TIM1 의 ARR 은 16비트다. 시작 속도가 너무 느리면 한 주기를 표현할 수 없어
  * 카운터가 엉뚱하게 감기므로, 조용하게 만들겠다고 무한정 낮추지 못하게 막는다.

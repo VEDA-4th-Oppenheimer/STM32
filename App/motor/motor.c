@@ -188,8 +188,13 @@ static uint32_t axis_decel_pulses(uint32_t v_pps, uint32_t accel_pps2)
         const uint32_t dv2 = (v_pps * v_pps)
                            - (MOTOR_START_PPS * MOTOR_START_PPS);
         const uint32_t den = 2u * accel_pps2;
-        /* +4 펄스 여유를 두어 목적지 도착 전에 확실하게 MOTOR_START_PPS 로 착지 */
-        n = ((dv2 + (den - 1u)) / den) + 4u;
+        const uint32_t n_trap = (dv2 + (den - 1u)) / den;
+#if MOTOR_SCURVE_ENABLE
+        /* 양측 S-Curve: Floor 25% 가속도 감쇠(1.555배) 보정 및 +6p 확정 마진 */
+        n = ((n_trap * MOTOR_SCURVE_DECEL_SCALE_Q8) / 256u) + 6u;
+#else
+        n = n_trap + 4u;
+#endif
     }
     return n;
 }
@@ -223,10 +228,11 @@ static void axis_ramp(motor_axis_t ax, int32_t remaining)
         }
 
         if ((uint32_t)remaining <= axis_decel_pulses(v_pps, cfg->accel_pps2)) {
-            /* 감속 구간 — 남은 펄스로 시작 속도까지 내려오는 구간이다.
-             * 감속 시에는 정확하게 MOTOR_V_START_Q8 에 착지하도록
-             * 공칭 가속도(cfg->accel_pps2) 기반의 확정적 감속 증분을 적용한다. */
+            /* 감속 구간 — 양측 S-Curve 저크 제한 감속 증분 적용 */
             uint32_t dv_dec_q8 = (cfg->accel_pps2 * rt->c_us) / MOTOR_DV_DIV;
+#if MOTOR_SCURVE_ENABLE
+            dv_dec_q8 = (dv_dec_q8 * s_scale_q8) / 256u;
+#endif
             if (dv_dec_q8 == 0u) {
                 dv_dec_q8 = 1u;
             }
